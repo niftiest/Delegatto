@@ -1,0 +1,110 @@
+{
+  "name": "delegatto",
+  "version": "1.0.0",
+  "private": true,
+  "main": "out/main/index.js",
+  "scripts": {
+    "predev": "electron-rebuild -f -w better-sqlite3",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm rebuild better-sqlite3",
+    "test": "vitest run",
+    "dist": "electron-vite build && electron-builder --win nsis portable",
+    "dist:dir": "electron-vite build && electron-builder --win dir"
+  },
+  "dependencies": {
+    "@fontsource-variable/dm-sans": "^5.3.0",
+    "@fontsource-variable/figtree": "^5.3.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/ibm-plex-sans": "^5.3.0",
+    "@fontsource-variable/manrope": "^5.3.0",
+    "@tanstack/react-virtual": "^3.10.8",
+    "better-sqlite3": "^11.5.0",
+    "chokidar": "^3.6.0",
+    "electron-updater": "^6.8.11",
+    "highlight.js": "^11.12.0",
+    "lowlight": "^3.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.9.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.5"
+  },
+  "productName": "Delegatto",
+  "description": "A Windows desktop app for Claude Code chats",
+  "author": "NiftiestPixel",
+  "build": {
+    "appId": "com.niftiestpixel.delegatto",
+    "productName": "Delegatto",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "npmRebuild": true,
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Delegatto",
+      "artifactName": "Delegatto-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Delegatto-Portable-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "niftiest",
+        "repo": "Delegatto",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/niftiest/Delegatto.git"
+  }
+}

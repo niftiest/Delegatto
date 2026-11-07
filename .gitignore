@@ -1,0 +1,77 @@
+# dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# build output
+dist/
+dist-electron/
+out/
+release/
+build/
+*.tsbuildinfo
+
+# electron-builder
+app-builds/
+*.exe
+*.msi
+*.nsis
+*.blockmap
+
+# native module builds (better-sqlite3, node-pty)
+prebuilds/
+*.node
+
+# local runtime state — the session catalog and index live here
+.delegatto/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# env & secrets
+.env
+.env.*
+!.env.example
+
+# editors
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+
+# os
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# test & coverage
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# scratch
+tmp/
+temp/
+
+# Local secrets (OpenRouter key, etc.) -- never commit
+local-secrets.json
+
+# Internal docs (design specs, plans, captured protocol notes) stay local --
+# README.md is the only doc published.
+docs/
+*.md
+!README.md
+!THIRD-PARTY-NOTICES.md
