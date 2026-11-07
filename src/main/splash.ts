@@ -28,8 +28,8 @@ const HTML = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   html,body{margin:0;height:100%;background:transparent;overflow:hidden;user-select:none;-webkit-app-region:drag;
     font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif}
-  .tile{box-sizing:border-box;width:${SIZE}px;height:${SIZE}px;border-radius:${RADIUS}px;background:#17605C;
-    border:2px solid #124D4A;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .tile{box-sizing:border-box;width:${SIZE}px;height:${SIZE}px;border-radius:${RADIUS}px;background:#4A5360;
+    border:2px solid #586272;display:flex;flex-direction:column;align-items:center;justify-content:center}
   .mark .body{fill:#F2A044}
   .mark .eye{fill:#1C1A19;animation:2.4s cubic-bezier(.65,0,.35,1) infinite}
   .mark .smile{fill:none;stroke:#1C1A19;stroke-width:5;stroke-linecap:round}
@@ -39,7 +39,7 @@ const HTML = `<!DOCTYPE html><html><head><meta charset="utf-8">
   @keyframes wink-r{0%,38%,100%{${UNDER_R}}50%,88%{${CURSOR_R}}}
   #status{margin-top:24px;max-width:240px;font-size:13.5px;font-weight:600;color:#F4F1EA;text-align:center;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .bar{margin-top:12px;width:150px;height:8px;border-radius:4px;background:#0F4542;overflow:hidden}
+  .bar{margin-top:12px;width:150px;height:8px;border-radius:4px;background:#3A414C;overflow:hidden}
   .bar i{display:block;height:100%;width:0;border-radius:4px;background:#F2A044;transition:width .2s ease}
   .bar.indet i{width:35%;animation:slide 1.1s ease-in-out infinite}
   @keyframes slide{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}

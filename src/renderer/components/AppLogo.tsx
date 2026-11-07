@@ -1,8 +1,8 @@
-/** The app's icon: the cat on its teal tile, as in resources/icon.svg. */
+/** The app's icon: the cat on its slate tile, as in resources/icon.svg. */
 export function AppLogo({ size, className }: { size: number; className?: string }) {
   return (
     <svg className={className} viewBox="0 0 100 100" width={size} height={size} aria-hidden="true">
-      <rect width="100" height="100" rx="30" fill="#17605C" />
+      <rect width="100" height="100" rx="30" fill="#4A5360" />
       <g transform="translate(50 50) scale(0.921) translate(-50 -51)">
         <circle cx="28" cy="24" r="8" fill="#F2A044" />
         <circle cx="72" cy="24" r="8" fill="#F2A044" />
