@@ -564,3 +564,21 @@ describe('Transport — does not import electron', () => {
     expect(/from\s+['"]electron/.test(src)).toBe(false)
   })
 })
+
+describe('Transport — a folder that is gone', () => {
+  function failing(folderExists: boolean): string[] {
+    const child = new FakeChild()
+    const transport = new Transport(baseSpec({ cwd: 'D:\GIT\Gone' }), { claudeBin: 'claude', spawnFn: () => child, folderExists: () => folderExists })
+    const types: string[] = []
+    transport.on(e => { if (e.kind === 'other') types.push(e.type) })
+    transport.start()
+    child.emitError(Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }))
+    return types
+  }
+  it('says the folder is missing, not Claude Code, when that is what is gone', () => {
+    expect(failing(false)).toEqual(['spawn-error: folder-missing D:\GIT\Gone'])
+  })
+  it('still reports a missing program when the folder is there', () => {
+    expect(failing(true)).toEqual(['spawn-error: spawn claude ENOENT'])
+  })
+})

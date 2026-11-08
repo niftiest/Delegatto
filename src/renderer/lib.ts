@@ -119,6 +119,10 @@ export const CLAUDE_SETUP_URL = 'https://code.claude.com/docs/en/setup'
 
 /** What to say when Claude Code won't start. */
 export function spawnErrorNotice(detail: string): string {
+  if (detail.startsWith('folder-missing ')) {
+    const folder = detail.slice('folder-missing '.length)
+    return `This chat's folder, ${folder}, isn't on this PC, so Claude can't run there. It may have been moved, renamed or deleted, or the chat came from another PC. Put the folder back, or for a synced project, set it up on this PC from New chat.`
+  }
   return /ENOENT/.test(detail)
     ? `Claude Code isn't installed, or Delegatto can't find it. Install it from ${CLAUDE_SETUP_URL}, or set its path in Settings under Engine.`
     : `Claude couldn't start: ${detail}`

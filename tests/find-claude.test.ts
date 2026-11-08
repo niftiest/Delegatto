@@ -53,3 +53,11 @@ describe('when Claude Code will not start', () => {
     expect(spawnErrorNotice('spawn EPERM')).toBe("Claude couldn't start: spawn EPERM")
   })
 })
+
+describe('when the chat folder is gone', () => {
+  it('names the folder instead of blaming Claude Code', () => {
+    const notice = spawnErrorNotice('folder-missing D:\GIT\HotspotProxy')
+    expect(notice).toContain('D:\GIT\HotspotProxy')
+    expect(notice).not.toContain("isn't installed")
+  })
+})

@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { elicitationFrom, parseControlRequest, parseControlResponse, parseEvent } from './events'
 import type { LiveEvent } from '../../shared/engine-types'
 
@@ -174,11 +175,14 @@ export class Transport {
    *  test against an in-memory child (see `tests/engine-transport.test.ts`'s
    *  `FakeChild`). Task 4 (pool) should construct via
    *  `new Transport(spec, { claudeBin })` and only pass `spawnFn` in tests. */
-  constructor(spec: SpawnSpec, opts: { claudeBin: string; spawnFn?: SpawnFn }) {
+  constructor(spec: SpawnSpec, opts: { claudeBin: string; spawnFn?: SpawnFn; folderExists?: (path: string) => boolean }) {
     this.spec = spec
     this.claudeBin = opts.claudeBin
     this.spawnFn = opts.spawnFn ?? defaultSpawn
+    this.folderExists = opts.folderExists ?? existsSync
   }
+
+  private readonly folderExists: (path: string) => boolean
 
   start(): void {
     if (this.started) throw new Error('Transport.start() called twice')
@@ -195,7 +199,9 @@ export class Transport {
     // claudeBin (ENOENT). Surface it as an event and a synthetic exit
     // instead of letting it become an uncaught exception that kills the app.
     ;(child as unknown as ErrorCapableChild).on('error', (err: Error) => {
-      this.emitEvent({ kind: 'other', type: `spawn-error: ${err.message}` })
+      // Windows says ENOENT for a missing folder just as for a missing program, so tell them apart.
+      const missingFolder = (err as NodeJS.ErrnoException).code === 'ENOENT' && !this.folderExists(this.spec.cwd)
+      this.emitEvent({ kind: 'other', type: missingFolder ? `spawn-error: folder-missing ${this.spec.cwd}` : `spawn-error: ${err.message}` })
       this.fireExit(null)
     })
 
