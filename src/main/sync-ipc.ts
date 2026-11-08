@@ -163,7 +163,10 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
       const sender = e.sender
       return service.scanProjectFor(String(dir ?? ''), p => { if (!sender.isDestroyed()) sender.send(SYNC_IPC.scanProgress, p) })
     },
-    [SYNC_IPC.enableProject]: (_e, dir: string, d: FindingDecisions) => service.enableProject(String(dir ?? ''), decisionsOf(d)),
+    [SYNC_IPC.enableProject]: (e, dir: string, d: FindingDecisions) => {
+      const sender = e.sender
+      return service.enableProject(String(dir ?? ''), decisionsOf(d), p => { if (!sender.isDestroyed()) sender.send(SYNC_IPC.enableProgress, p) })
+    },
     [SYNC_IPC.disableProject]: (_e, id: string) => service.disableProject(String(id ?? '')),
     [SYNC_IPC.linkProject]: (_e, id: string, folder: string) => service.linkProject(String(id ?? ''), String(folder ?? '')),
     [SYNC_IPC.syncNow]: () => service.syncNow(),

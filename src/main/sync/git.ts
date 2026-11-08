@@ -29,14 +29,14 @@ export class SyncGit {
     private readonly credentialArgs: string[]
   ) {}
 
-  private async git(args: string[], opts: { network?: boolean; cwd?: string; allowFail?: boolean } = {}): Promise<RunResult> {
+  private async git(args: string[], opts: { network?: boolean; cwd?: string; allowFail?: boolean; onStderr?: (text: string) => void } = {}): Promise<RunResult> {
     const result = await this.run('git', [
       ...this.credentialArgs,
       '-c', 'core.autocrlf=false', '-c', 'core.longpaths=true', '-c', 'core.hooksPath=NUL',
       '-c', 'user.name=Delegatto Sync', '-c', 'user.email=sync@delegatto.invalid',
       '-c', 'gc.auto=0', '-c', 'commit.gpgsign=false',
       ...args
-    ], { cwd: opts.cwd ?? this.dir, timeoutMs: opts.network === true ? NETWORK_TIMEOUT_MS : QUICK_TIMEOUT_MS })
+    ], { cwd: opts.cwd ?? this.dir, timeoutMs: opts.network === true ? NETWORK_TIMEOUT_MS : QUICK_TIMEOUT_MS, onStderr: opts.onStderr })
     if (result.code !== 0 && opts.allowFail !== true) {
       throw new GitError(cleanOutput(result.stderr) || `git ${args[0]} failed.`, result)
     }
@@ -100,11 +100,14 @@ export class SyncGit {
     await this.git(['rm', '-rqf', '--ignore-unmatch', '--sparse', '--', path])
   }
 
-  /** Commits and pushes. False when another PC got there first; nothing is lost, the caller redoes it. */
-  async commitAndPush(message: string): Promise<boolean> {
+  /** Commits and pushes. False when another PC got there first; nothing is lost, the caller redoes it.
+   *  `onPercent` gets how much of the upload git has sent so far. */
+  async commitAndPush(message: string, onPercent?: (percent: number) => void): Promise<boolean> {
     await this.git(['add', '-A', '--sparse'])
     await this.git(['commit', '-q', '-m', message])
-    const pushed = await this.git(['push', '-q', 'origin', 'HEAD:refs/heads/main'], { network: true, allowFail: true })
+    const pushed = onPercent === undefined
+      ? await this.git(['push', '-q', 'origin', 'HEAD:refs/heads/main'], { network: true, allowFail: true })
+      : await this.git(['push', '--progress', 'origin', 'HEAD:refs/heads/main'], { network: true, allowFail: true, onStderr: pushProgressReader(onPercent) })
     if (pushed.code === 0) return true
     const text = pushed.stderr
     if (/non-fast-forward|fetch first|rejected|cannot lock ref/i.test(text)) return false
@@ -142,6 +145,24 @@ export class SyncGit {
   async currentHead(): Promise<string | null> {
     const r = await this.git(['rev-parse', '--verify', '-q', 'HEAD'], { allowFail: true })
     return r.code === 0 ? r.stdout.trim() : null
+  }
+}
+
+/** Turns git's push progress into one percent for the whole upload. Git prints
+ *  "Writing objects:  42% (21/50)" lines; the chunks can split a line anywhere. */
+export function pushProgressReader(onPercent: (percent: number) => void): (text: string) => void {
+  let buffer = ''
+  let last = -1
+  return text => {
+    buffer += text
+    const parts = buffer.split(/[\r\n]/)
+    buffer = parts.pop() ?? ''
+    for (const line of parts) {
+      const m = /Writing objects:\s+(\d+)%/.exec(line)
+      if (m === null) continue
+      const percent = Math.min(100, Number(m[1]))
+      if (percent !== last) { last = percent; onPercent(percent) }
+    }
   }
 }
 

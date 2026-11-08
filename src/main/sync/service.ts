@@ -17,7 +17,7 @@ import { codeState, SyncGit } from './git'
 import { countImages, mergeFinding, redactSecrets, scanText } from './secret-scan'
 import { isSessionId, isTextFile, keyEndingAt, locateRow, readRows, rowKey } from './transcript'
 import type {
-  FindingDecisions, GithubState, LinkOutcome, ProjectScan, RemoteProject, RepoSearch, ResolveOutcome, ScanProgress,
+  EnableProgress, FindingDecisions, GithubState, LinkOutcome, ProjectScan, RemoteProject, RepoSearch, ResolveOutcome, ScanProgress,
   SecretFinding, SetupOutcome, SyncChatInfo, SyncConflict, SyncDevice, SyncProjectRow, SyncResult, SyncStatus
 } from '../../shared/sync-types'
 
@@ -232,6 +232,8 @@ export class SyncService {
   private lastError: string | null = null
   private lastCheckAt: number | null = null
   private repoSize: number | null = null
+  /** Set while a project's first sync runs, so its dialog can show how far along it is. */
+  private enableProgress: { root: string; report: (p: EnableProgress) => void } | null = null
   private catalog = new Map<string, ProjectMeta>()
   private chatMeta = new Map<string, { device: string; deviceId: string; at: number; head: string | null; title: string | null }>()
   private devices: SyncDevice[] = []
@@ -666,27 +668,37 @@ export class SyncService {
 
   // ---------------------------------------------------------------- opting in and out
 
-  enableProject(workingDir: string, decisions: FindingDecisions): Promise<SyncResult> {
+  enableProject(workingDir: string, decisions: FindingDecisions, progress?: (p: EnableProgress) => void): Promise<SyncResult> {
     return this.guarded('Starting to sync the project', async () => {
       this.requireRepo()
       const root = normalizePath(workingDir)
       if (!isFullyQualified(root)) throw new Error('Choose a project with a full folder path.')
       if (Object.values(this.state.projects).some(p => isSamePath(p.root, root))) return
-      await this.git!.pull()
-      await this.loadCatalog()
-      // The same repo already synced from another PC is the same project.
-      const github = readOriginRepo(root)
-      const match = github === null ? undefined : [...this.catalog.values()].find(m => m.github?.toLowerCase() === github.toLowerCase() &&
-        this.state.projects[m.projectId] === undefined)
-      const projectId = match?.projectId ?? randomUUID()
-      this.state.projects[projectId] = {
-        projectId, root, excludedChats: decisions.excludeChats, redact: decisions.redact, allow: decisions.allow,
-        pendingFindings: [], lastSyncAt: null, warnings: [], files: {}
+      this.enableProgress = progress === undefined ? null : { root, report: progress }
+      try {
+        await this.enableNow(root, decisions)
+      } finally {
+        this.enableProgress = null
       }
-      this.save()
-      await this.applySparse()
-      await this.cycle()
     })
+  }
+
+  private async enableNow(root: string, decisions: FindingDecisions): Promise<void> {
+    this.enableProgress?.report({ workingDir: root, phase: 'download', done: 0, total: 0 })
+    await this.git!.pull()
+    await this.loadCatalog()
+    // The same repo already synced from another PC is the same project.
+    const github = readOriginRepo(root)
+    const match = github === null ? undefined : [...this.catalog.values()].find(m => m.github?.toLowerCase() === github.toLowerCase() &&
+      this.state.projects[m.projectId] === undefined)
+    const projectId = match?.projectId ?? randomUUID()
+    this.state.projects[projectId] = {
+      projectId, root, excludedChats: decisions.excludeChats, redact: decisions.redact, allow: decisions.allow,
+      pendingFindings: [], lastSyncAt: null, warnings: [], files: {}
+    }
+    this.save()
+    await this.applySparse()
+    await this.cycle()
   }
 
   disableProject(projectId: string): Promise<SyncResult> {
@@ -886,6 +898,8 @@ export class SyncService {
     this.requireRepo()
     const git = this.git!
     for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt++) {
+      const watch = this.enableProgress
+      watch?.report({ workingDir: watch.root, phase: 'download', done: 0, total: 0 })
       const main = await git.pull()
       await this.loadCatalog()
       const pending: Array<() => void> = []
@@ -900,7 +914,10 @@ export class SyncService {
         this.finishCycle()
         return
       }
-      if (await git.commitAndPush(`${this.state.deviceId} sync`)) {
+      const onPercent = watch === null ? undefined
+        : (percent: number) => watch.report({ workingDir: watch.root, phase: 'upload', done: percent, total: 100 })
+      onPercent?.(0)
+      if (await git.commitAndPush(`${this.state.deviceId} sync`, onPercent)) {
         for (const done of pending) done()
         this.state.remoteSha = await git.currentHead()
         this.finishCycle()
@@ -939,13 +956,17 @@ export class SyncService {
     let localChanges = false
     const uploadsBefore = pending.length
     const code = await codeState(this.deps.run, p.root)
-    for (const sessionId of chats) {
-      if (p.excludedChats.includes(sessionId)) continue
+    const included = [...chats].filter(id => !p.excludedChats.includes(id))
+    const watch = this.enableProgress !== null && isSamePath(this.enableProgress.root, p.root) ? this.enableProgress : null
+    let done = 0
+    watch?.report({ workingDir: watch.root, phase: 'pack', done, total: included.length })
+    for (const sessionId of included) {
       try {
         if (await this.syncChat(p, sessionId, code, newFindings, pending)) localChanges = true
       } catch (e) {
         p.warnings.push(`A chat couldn't sync: ${errorText(e)}`)
       }
+      watch?.report({ workingDir: watch.root, phase: 'pack', done: ++done, total: included.length })
     }
     try {
       if (await this.syncProjectFiles(p, newFindings, pending)) localChanges = true

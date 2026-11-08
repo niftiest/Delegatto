@@ -1274,6 +1274,10 @@ main[data-theme="terminal"] { font-family:var(--mono); font-size:var(--t-fs); co
 .dw-progress { height:6px; border-radius:3px; background:var(--s3); overflow:hidden; }
 .dw-progress i { display:block; height:100%; width:35%; background:var(--accent); animation:dw-slide 1.1s ease-in-out infinite; }
 @keyframes dw-slide { 0% { transform:translateX(-110%) } 100% { transform:translateX(320%) } }
+.sync-progress { height:6px; margin-top:4px; border-radius:3px; background:var(--s3); overflow:hidden; }
+.sync-progress i { display:block; height:100%; background:var(--accent); transition:width .25s ease; }
+.sync-progress.busy i { width:35%; animation:dw-slide 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .sync-progress i { transition:none; } .sync-progress.busy i { animation:none; width:100%; opacity:.5; } }
 .btn-link { background:none; border:0; padding:0; color:var(--accent); cursor:pointer; font:inherit; text-decoration:underline; }
 
 /* ── Manage screen (port of ClaudeMemoryTool) ──────────────────────────────

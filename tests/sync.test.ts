@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { encodePath } from '../src/main/manage/paths'
 import { realRunner, type Runner } from '../src/main/engine/github'
-import { syncOffer } from '../src/shared/sync-types'
+import { syncOffer, type EnableProgress } from '../src/shared/sync-types'
+import { pushProgressReader } from '../src/main/sync/git'
 import { SyncService, type KeyStore, type SyncHub } from '../src/main/sync/service'
 import { deriveKey, keyCheck, newKdf, newRecoveryKey, SyncCodec, verifyKeyCheck, WrongKeyError } from '../src/main/sync/crypto'
 import { fingerprintOf, redactSecrets, scanText } from '../src/main/sync/secret-scan'
@@ -395,6 +396,34 @@ describe('syncing between two PCs', () => {
     await ok(a.service.enableProject(root, NO_DECISIONS))
     const chunks = repoFiles().filter(f => /\/r\d+-/.test(f))
     expect(chunks.length).toBe(2)
+  })
+
+  it('reports how far a project\'s first sync has got', async () => {
+    const a = makePc('PC-A')
+    await a.service.setupNew({ name: 'delegatto-sync', encrypted: true })
+    const root = a.tree.workDir('Progress')
+    for (let i = 0; i < 3; i++) {
+      const sid = randomUUID()
+      a.tree.addSessionRaw(root, sid, userRow(root, sid, `chat ${i}`), assistantRow(root, sid, 'done'))
+    }
+    const seen: EnableProgress[] = []
+    await ok(a.service.enableProject(root, NO_DECISIONS, p => seen.push(p)))
+    expect(seen[0]!.phase).toBe('download')
+    const packs = seen.filter(p => p.phase === 'pack')
+    expect(packs.map(p => p.done)).toEqual([0, 1, 2, 3])
+    expect(packs.every(p => p.total === 3)).toBe(true)
+    const uploads = seen.filter(p => p.phase === 'upload')
+    expect(uploads[0]!.done).toBe(0)
+    expect(uploads.at(-1)!.done).toBe(100)
+    expect(seen.findIndex(p => p.phase === 'upload')).toBeGreaterThan(seen.findIndex(p => p.phase === 'pack'))
+  })
+
+  it('reads git\'s push progress even when a line arrives in pieces', () => {
+    const got: number[] = []
+    const read = pushProgressReader(p => got.push(p))
+    read('Enumerating objects: 5, done.\nWriting objects:  4')
+    read('0% (2/5)\rWriting objects:  40% (2/5)\rWriting objects: 100% (5/5), 1.2 KiB | 1.2 MiB/s, done.\n')
+    expect(got).toEqual([40, 100])
   })
 
   it('does not bring back a chat deleted on this PC, or remove it from the other', async () => {

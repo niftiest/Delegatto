@@ -12,6 +12,7 @@ export const SYNC_IPC = {
   scanProject: 'sync:scanProject',
   scanProgress: 'sync:scanProgress',
   enableProject: 'sync:enableProject',
+  enableProgress: 'sync:enableProgress',
   disableProject: 'sync:disableProject',
   linkProject: 'sync:linkProject',
   syncNow: 'sync:now',
@@ -52,6 +53,9 @@ export type ProjectScan = {
 }
 
 export type ScanProgress = { workingDir: string; done: number; total: number }
+
+/** A project's first sync. `pack` counts chats; `upload` counts percent; `download` has no total. */
+export type EnableProgress = { workingDir: string; phase: 'download' | 'pack' | 'upload'; done: number; total: number }
 
 /** What to do with each finding when a project is opted in. */
 export type FindingDecisions = {
@@ -211,6 +215,7 @@ export type SyncApi = {
   syncScanProject(workingDir: string): Promise<ProjectScan>
   onSyncScanProgress(cb: (p: ScanProgress) => void): () => void
   syncEnableProject(workingDir: string, decisions: FindingDecisions): Promise<SyncResult>
+  onSyncEnableProgress(cb: (p: EnableProgress) => void): () => void
   syncDisableProject(projectId: string): Promise<SyncResult>
   syncLinkProject(projectId: string, folder: string): Promise<LinkOutcome>
   syncNow(): Promise<SyncResult>

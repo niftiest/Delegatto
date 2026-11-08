@@ -9,7 +9,7 @@ export type { GithubRepo, GithubRepoOption, GithubStatus, PrepareRepoOutcome } f
  *  command runs without a shell. Node-only, like the rest of src/main/engine. */
 
 export type RunResult = { code: number; stdout: string; stderr: string }
-export type Runner = (file: string, args: string[], opts?: { cwd?: string; timeoutMs?: number }) => Promise<RunResult>
+export type Runner = (file: string, args: string[], opts?: { cwd?: string; timeoutMs?: number; onStderr?: (text: string) => void }) => Promise<RunResult>
 
 const REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_][A-Za-z0-9._-]*$/
 const CLONE_TIMEOUT_MS = 10 * 60_000
@@ -42,7 +42,7 @@ export function ghPath(): string {
 
 /** The real runner. Never prompts: a clone that needs input fails with a message instead of hanging. */
 export const realRunner: Runner = (file, args, opts) => new Promise((done, fail) => {
-  execFile(file === 'gh' ? ghPath() : file, args, {
+  const child = execFile(file === 'gh' ? ghPath() : file, args, {
     cwd: opts?.cwd,
     timeout: opts?.timeoutMs ?? QUICK_TIMEOUT_MS,
     windowsHide: true,
@@ -52,6 +52,8 @@ export const realRunner: Runner = (file, args, opts) => new Promise((done, fail)
     if (err !== null && typeof err.code !== 'number') { fail(err); return }
     done({ code: err === null ? 0 : (err.code as number), stdout, stderr })
   })
+  const onStderr = opts?.onStderr
+  if (onStderr !== undefined) child.stderr?.on('data', (chunk: Buffer | string) => onStderr(chunk.toString()))
 })
 
 /** `owner/name` for a remote on github.com itself, else null. Credentials in the URL are ignored. */

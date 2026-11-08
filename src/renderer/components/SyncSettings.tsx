@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { ago } from './SyncChat'
 import type {
-  FindingDecisions, ProjectScan, RemoteProject, RepoSearch, SecretFinding, SyncProjectRow, SyncStatus
+  EnableProgress, FindingDecisions, ProjectScan, RemoteProject, RepoSearch, SecretFinding, SyncProjectRow, SyncStatus
 } from '../../shared/sync-types'
 
 const DEFAULT_REPO = 'delegatto-sync'
@@ -314,6 +314,14 @@ export function StartProjectSync({ workingDir, name, encrypted, onClose }: {
   const [scan, setScan] = useState<ProjectScan | null>(null)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [checked, setChecked] = useState<{ done: number; total: number } | null>(null)
+  const [progress, setProgress] = useState<EnableProgress | null>(null)
+  useEffect(() => {
+    const mine = (dir: string): boolean => samePath(dir, workingDir)
+    const offScan = api.onSyncScanProgress(p => { if (mine(p.workingDir)) setChecked({ done: p.done, total: p.total }) })
+    const offEnable = api.onSyncEnableProgress(p => { if (mine(p.workingDir)) setProgress(p) })
+    return () => { offScan(); offEnable() }
+  }, [workingDir])
   const closeRef = useRef(onClose)
   closeRef.current = onClose
   const aliveRef = useRef(true)
@@ -350,9 +358,39 @@ export function StartProjectSync({ workingDir, name, encrypted, onClose }: {
       <div className="modal sync-dialog">
         <h2 className="modal-title">Sync {name}?</h2>
         {error !== null && <div className="modal-error">{error}</div>}
-        {error === null && <p className="settings-note">{starting ? 'Starting to sync. This keeps going if you close this.' : 'Checking its chats for likely secrets…'}</p>}
+        {error === null && starting && <>
+          <p className="settings-note">{progressLabel(progress)}</p>
+          <ProgressBar fraction={progress === null || progress.total === 0 ? null : progress.done / progress.total} />
+          <p className="settings-note">This keeps going if you close this.</p>
+        </>}
+        {error === null && !starting && <>
+          <p className="settings-note">{checked === null || checked.total === 0 ? 'Checking its chats for likely secrets…' : `Checking its chats for likely secrets: ${checked.done} of ${checked.total}`}</p>
+          <ProgressBar fraction={checked === null || checked.total === 0 ? null : checked.done / checked.total} />
+        </>}
         <div className="modal-actions"><button type="button" className="btn-secondary" onClick={onClose}>{error !== null || starting ? 'Close' : 'Cancel'}</button></div>
       </div>
+    </div>
+  )
+}
+
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string): string => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+  return norm(a) === norm(b)
+}
+
+function progressLabel(p: EnableProgress | null): string {
+  if (p === null) return 'Starting to sync…'
+  if (p.phase === 'download') return 'Getting the latest from GitHub…'
+  if (p.phase === 'pack') return `Packing chats: ${p.done} of ${p.total}`
+  return `Uploading to GitHub: ${p.done}%`
+}
+
+/** A fraction from 0 to 1, or null when there's no way to tell how far along it is. */
+function ProgressBar({ fraction }: { fraction: number | null }) {
+  return (
+    <div className={`sync-progress${fraction === null ? ' busy' : ''}`} role="progressbar"
+      aria-valuemin={0} aria-valuemax={100} aria-valuenow={fraction === null ? undefined : Math.round(fraction * 100)}>
+      <i style={fraction === null ? undefined : { width: `${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%` }} />
     </div>
   )
 }
