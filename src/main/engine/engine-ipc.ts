@@ -697,7 +697,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
   })
   ipcMain.handle(ENGINE_IPC.exportChat, async (_e, sessionPk: number, mode: 'file' | 'text', fileName?: string): Promise<ExportChatResult> => {
     try {
-      const row = db.prepare('SELECT s.title AS title, p.cwd AS cwd FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?').get(sessionPk) as { title: string | null; cwd: string | null } | undefined
+      const row = db.prepare('SELECT COALESCE(s.custom_title, s.ai_title, s.title) AS title, p.cwd AS cwd FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?').get(sessionPk) as { title: string | null; cwd: string | null } | undefined
       if (row === undefined) return { status: 'failed', message: 'That chat is no longer available.' }
       const page = await loadTranscript(db, sessionPk, { limit: Number.MAX_SAFE_INTEGER })
       const text = exportText(page.items, { title: row.title ?? 'Chat', cwd: row.cwd })

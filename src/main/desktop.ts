@@ -38,7 +38,7 @@ export function createDesktop(db: Catalog, getWindow: () => BrowserWindow | null
 
   const describe = (sessionPk: number): { title: string; dirName: string } | null => {
     const row = db.prepare(`
-      SELECT s.title AS title, p.dir_name AS dirName, p.cwd AS cwd
+      SELECT COALESCE(s.custom_title, s.ai_title, s.title) AS title, p.dir_name AS dirName, p.cwd AS cwd
       FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?
     `).get(sessionPk) as { title: string | null; dirName: string; cwd: string | null } | undefined
     if (row === undefined) return null

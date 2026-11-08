@@ -88,6 +88,17 @@ describe('DeleteWizard, several projects', () => {
     expect(projectRows(db)).toEqual([encodePath(c)])
   })
 
+  it('names a chat the way the chat list does: its own name, then the made-up one, then its first message', async () => {
+    const t = tree()
+    const db = catalogWith([encodePath('D:\\Gone\\Project')])
+    const pk = (db.prepare('SELECT id FROM sessions').get() as { id: number }).id
+    const w = new DeleteWizard(db, deps(t))
+    db.prepare("UPDATE sessions SET title = 'test', ai_title = 'Fix the proxy relay' WHERE id = ?").run(pk)
+    expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “Fix the proxy relay”')
+    db.prepare("UPDATE sessions SET custom_title = 'Hotspot debugging' WHERE id = ?").run(pk)
+    expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “Hotspot debugging”')
+  })
+
   it('tells sync about each project it deleted, and only those', async () => {
     const t = tree()
     const { a, b } = twoProjects(t)

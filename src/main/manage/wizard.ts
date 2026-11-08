@@ -96,7 +96,7 @@ export class DeleteWizard {
     const paths = this.deps.paths
     if (target.scope === 'chat') {
       const row = this.db.prepare(`
-        SELECT s.file_path AS filePath, s.session_id AS sessionId, s.title AS title, p.dir_name AS dirName
+        SELECT s.file_path AS filePath, s.session_id AS sessionId, COALESCE(s.custom_title, s.ai_title, s.title) AS title, p.dir_name AS dirName
         FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?
       `).get(target.sessionPk) as { filePath: string; sessionId: string; title: string | null; dirName: string } | undefined
       if (row === undefined) throw new Error('That chat is no longer in the catalog.')
