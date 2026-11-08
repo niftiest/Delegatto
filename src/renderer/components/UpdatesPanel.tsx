@@ -85,6 +85,9 @@ export function useUpdateStatus(): UpdateStatus | null {
 export function UpdatesPanel({ autoInstall }: { autoInstall: boolean }) {
   const status = useUpdateStatus()
   const restart = useRestartRequest()
+  // Opening this tab checks right away. Main ignores it when a check is already running, or
+  // when an update is downloading or ready, and development builds never check.
+  useEffect(() => { void api.checkForUpdates().catch(() => {}) }, [])
   if (status === null) return null
   const busy = status.state === 'checking' || status.state === 'downloading'
   return (
