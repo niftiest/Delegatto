@@ -924,6 +924,7 @@ export function App() {
       if (ev.kind === 'result') void api.contextUsage(sid).then(c => { if (c !== null) setContext(c) })
       // A failed turn writes nothing to the chat, so without this it just stops.
       // An expired or missing sign-in gets the sign-in dialog rather than Claude Code's error.
+      if (ev.kind === 'assistant' && ev.apiError !== undefined && (ev.apiError === 'authentication_failed' || isSignedOutError(ev.apiError))) setSignIn('expired')
       if (ev.kind === 'result' && ev.isError && isSignedOutError(ev.text)) setSignIn('expired')
       else if (ev.kind === 'result' && ev.isError) setTerminalNotice(ev.text)
       if (ev.kind === 'retry') setLiveActivity(retryLabel(ev))

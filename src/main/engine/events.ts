@@ -112,7 +112,9 @@ function parseAssistant(row: Record<string, unknown>): LiveEvent {
 
   const blocks = blocksFromContent(message.content)
   const usage = extractUsage(message.usage)
-  return usage === undefined ? { kind: 'assistant', uuid, blocks } : { kind: 'assistant', uuid, blocks, usage }
+  const base: LiveEvent = usage === undefined ? { kind: 'assistant', uuid, blocks } : { kind: 'assistant', uuid, blocks, usage }
+  // A reply Claude Code made up to report an API failure says which kind, such as an expired sign-in.
+  return typeof row.error === 'string' && row.error.length > 0 ? { ...base, apiError: row.error } : base
 }
 
 /** A subagent's message, as one line for showing what it's doing. */

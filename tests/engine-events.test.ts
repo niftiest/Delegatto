@@ -253,3 +253,17 @@ describe('parseEvent — other/unknown types', () => {
     expect(parseEvent('{"type":"weird_future_event","foo":1}')).toEqual({ kind: 'other', type: 'weird_future_event' })
   })
 })
+
+describe('parseEvent — a reply Claude Code made up to report a failure', () => {
+  it('says which kind of failure, as PC #2 showed for an expired sign-in', () => {
+    const line = JSON.stringify({
+      type: 'assistant', uuid: 'u1', error: 'authentication_failed', isApiErrorMessage: true,
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Failed to authenticate: OAuth session expired and could not be refreshed' }] }
+    })
+    expect(parseEvent(line)).toMatchObject({ kind: 'assistant', uuid: 'u1', apiError: 'authentication_failed' })
+  })
+  it('leaves an ordinary reply without one', () => {
+    const line = JSON.stringify({ type: 'assistant', uuid: 'u2', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } })
+    expect(parseEvent(line)).not.toHaveProperty('apiError')
+  })
+})
