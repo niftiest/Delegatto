@@ -14,6 +14,7 @@ export type { EngineSnapshot, ExternalLock, RemoteSession } from './engine-types
 // ../main/jsonl/rows. No runtime code (and no electron) crosses into this
 // module, which the renderer also imports.
 import type { StreamedRow } from '../main/jsonl/stream'
+import type { LoginState } from './login-types'
 
 /** Channel names for the write-path engine IPC surface (Plan 2 Task 6).
  *  `send`/`interrupt`/`resolvePermission` are fire-and-forget commands
@@ -102,6 +103,12 @@ export const ENGINE_IPC = {
   memorySave: 'engine:memorySave',
   /** invoke: how full this chat's context is, from its running process. */
   contextUsage: 'engine:contextUsage',
+  /** Signing in to Claude Code from the app: state, start, a pasted code, cancel; and its changes. */
+  loginState: 'engine:loginState',
+  loginStart: 'engine:loginStart',
+  loginSubmitCode: 'engine:loginSubmitCode',
+  loginCancel: 'engine:loginCancel',
+  loginChanged: 'engine:loginChanged',
   getProjectSettings: 'engine:getProjectSettings',
   /** invoke: the settings saved for a folder, for the New Chat dialog. */
   folderSettings: 'engine:folderSettings',
@@ -199,6 +206,14 @@ export type EngineApi = {
   memorySave(projectId: number, fileId: string, text: string, expectedMtimeMs: number | null): Promise<MemorySaveResult>
   /** Null when the chat has no process running. */
   contextUsage(sessionPk: number): Promise<ContextUsage | null>
+  /** Signing in to Claude Code: where it's got to. */
+  loginState(): Promise<LoginState>
+  /** Starts signing in and opens the browser. */
+  loginStart(): Promise<LoginState>
+  /** A code pasted from the sign-in page, for signing in from another device. */
+  loginSubmitCode(code: string): Promise<LoginState>
+  loginCancel(): Promise<void>
+  onLoginChanged(cb: (state: LoginState) => void): () => void
   /** The settings of the project this chat belongs to. */
   getProjectSettings(sessionPk: number): Promise<ProjectSettings>
   folderSettings(cwd: string): Promise<ProjectSettings>

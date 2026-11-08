@@ -11,6 +11,7 @@ import { MANAGE_IPC, type ContentSearchEvent, type ManageApi } from '../shared/m
 import { UPDATE_IPC, type UpdateApi, type UpdateStatus } from '../shared/update-types'
 import { CLAUDE_SETTINGS_IPC, type AutoCleanResult, type ClaudeSettingsApi } from '../shared/claude-settings-types'
 import { SYNC_IPC, type EnableProgress, type SyncIncoming, type ScanProgress, type SyncApi, type SyncStatus } from '../shared/sync-types'
+import type { LoginState } from '../shared/login-types'
 
 const api: DelegattoApi & EngineApi = {
   listProjects: () => ipcRenderer.invoke(IPC.listProjects),
@@ -100,6 +101,15 @@ const api: DelegattoApi & EngineApi = {
     const listener = (_e: unknown, usage: PlanUsage): void => cb(usage)
     ipcRenderer.on(ENGINE_IPC.planUsageChanged, listener)
     return () => { ipcRenderer.off(ENGINE_IPC.planUsageChanged, listener) }
+  },
+  loginState: () => ipcRenderer.invoke(ENGINE_IPC.loginState),
+  loginStart: () => ipcRenderer.invoke(ENGINE_IPC.loginStart),
+  loginSubmitCode: (code: string) => ipcRenderer.invoke(ENGINE_IPC.loginSubmitCode, code),
+  loginCancel: () => ipcRenderer.invoke(ENGINE_IPC.loginCancel),
+  onLoginChanged: cb => {
+    const listener = (_e: unknown, state: LoginState): void => cb(state)
+    ipcRenderer.on(ENGINE_IPC.loginChanged, listener)
+    return () => { ipcRenderer.off(ENGINE_IPC.loginChanged, listener) }
   },
   killEngine: (pid: number) => ipcRenderer.invoke(ENGINE_IPC.killEngine, pid),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(ENGINE_IPC.pickDirectory),

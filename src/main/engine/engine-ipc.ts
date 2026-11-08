@@ -15,6 +15,7 @@ import { SessionPool } from './pool'
 import { findClaude, LIVE_DETAIL_FLAGS, supportsLiveDetail } from './find-claude'
 import { execFile } from 'node:child_process'
 import { SessionWatcher } from './watcher'
+import { ClaudeLogin } from './claude-login'
 import { ClaudeInfoService, parseContextUsage } from './claude-info'
 import { getProjectSettings, getProjectSettingsByDir, updateProjectSettings } from '../catalog/project-settings'
 import { suggestionsWanted, type ProjectSettings, type ContextUsage } from '../../shared/project-options'
@@ -603,7 +604,10 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
     claudeInfo.planUsage(homedir()).then(a => planUsage.applyAnswer(a)).catch(err => console.warn('[engine] plan usage check failed', err))
   }, PLAN_CHECK_DELAY_MS)
   planCheck.unref?.()
-  const folderOrHome = (cwd: string | null): string => cwd !== null && cwd.length > 0 && existsSync(cwd) ? cwd : homedir()
+  const planUsageRefresh = (): void => {
+    claudeInfo.planUsage(homedir()).then(a => planUsage.applyAnswer(a)).catch(err => console.warn('[engine] plan usage check failed', err))
+  }
+  const folderOrHome =(cwd: string | null): string => cwd !== null && cwd.length > 0 && existsSync(cwd) ? cwd : homedir()
   const errorText = (err: unknown): string => err instanceof Error ? err.message : String(err)
   const chatMcpStatus = async (sessionPk: number): Promise<McpServerStatus[] | null> => {
     const info = getEngineSessionInfo(db, sessionPk)
@@ -651,6 +655,18 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
       if (cwd === null || (row?.cwd != null && sameFolder(row.cwd, cwd))) pool.restartForReload(s.sessionKey)
     }
   }
+  // Signing in to Claude Code from the app. Once signed in, running chats start again on the new login.
+  const login = new ClaudeLogin({
+    claudeBin,
+    cwd: () => homedir(),
+    openUrl: url => { void shell.openExternal(url) },
+    onChange: state => { if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.loginChanged, state) },
+    onSignedIn: () => { reloadChatsIn(null); planUsageRefresh() }
+  })
+  ipcMain.handle(ENGINE_IPC.loginState, () => login.state)
+  ipcMain.handle(ENGINE_IPC.loginStart, () => login.start())
+  ipcMain.handle(ENGINE_IPC.loginSubmitCode, (_e, code: unknown) => login.submitCode(typeof code === 'string' ? code : ''))
+  ipcMain.handle(ENGINE_IPC.loginCancel, () => { login.cancel() })
   const settingsLoc = () => ({ claudeDir: claudeHome(), managedFiles: defaultManagedFiles() })
   ipcMain.handle(ENGINE_IPC.hooksListing, (_e, sessionPk: number) => hooksOf(sessionPk))
   ipcMain.handle(ENGINE_IPC.addHook, async (_e, sessionPk: number, scope: HookScope, hook: { event: string; matcher: string | null; command: string; timeout?: number }): Promise<PanelResult<HooksListing>> => {
@@ -1024,6 +1040,8 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
       lockMonitor.dispose()
       ipcMain.removeHandler(ENGINE_IPC.listEngines)
       ipcMain.removeHandler(ENGINE_IPC.planUsage)
+      for (const ch of [ENGINE_IPC.loginState, ENGINE_IPC.loginStart, ENGINE_IPC.loginSubmitCode, ENGINE_IPC.loginCancel]) ipcMain.removeHandler(ch)
+      login.cancel()
       clearTimeout(planCheck)
       ipcMain.removeHandler(ENGINE_IPC.clearChat)
       ipcMain.removeHandler(ENGINE_IPC.claudeInfo)

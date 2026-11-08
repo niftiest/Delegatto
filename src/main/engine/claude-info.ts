@@ -115,7 +115,7 @@ export function parseContextUsage(raw: unknown): ContextUsage | null {
 }
 
 /** One short-lived process: send requests, then close. */
-class ControlSession {
+export class ControlSession {
   private readonly pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
   private failure: Error | null = null
   private closed = false

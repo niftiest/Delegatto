@@ -29,6 +29,8 @@ import { StartProjectSync } from './components/SyncSettings'
 import { projectSyncState, type ProjectSyncState, type SyncIncoming } from '../shared/sync-types'
 import { RemoteBadge } from './components/RemoteBadge'
 import { DeleteWizard } from './components/DeleteWizard'
+import { SignInDialog } from './components/SignInDialog'
+import { isSignedOutError } from '../shared/login-types'
 import { UpdateBar, UpdateIcon } from './components/UpdatesPanel'
 import { TextWithLinks } from './components/Markdown'
 import { FONT_SCALE_DEFAULT, fontStack, stepFontScale } from '../shared/font-settings'
@@ -243,6 +245,8 @@ export function App() {
   // set, the composer is read-only. Seeded on open via api.getLock, then kept
   // current by engine:lockChanged.
   const [externalLock, setExternalLock] = useState<ExternalLock | null>(null)
+  // The sign-in dialog: opened by an expired login, or by /login.
+  const [signIn, setSignIn] = useState<'expired' | 'asked' | null>(null)
   // Chats getting messages from another PC. The open one can't be written to until they're
   // in, and then it reloads to show them.
   const [incoming, setIncoming] = useState<SyncIncoming[]>([])
@@ -919,7 +923,9 @@ export function App() {
       if (ev.kind === 'exit') setBackgroundTasks([])
       if (ev.kind === 'result') void api.contextUsage(sid).then(c => { if (c !== null) setContext(c) })
       // A failed turn writes nothing to the chat, so without this it just stops.
-      if (ev.kind === 'result' && ev.isError) setTerminalNotice(ev.text)
+      // An expired or missing sign-in gets the sign-in dialog rather than Claude Code's error.
+      if (ev.kind === 'result' && ev.isError && isSignedOutError(ev.text)) setSignIn('expired')
+      else if (ev.kind === 'result' && ev.isError) setTerminalNotice(ev.text)
       if (ev.kind === 'retry') setLiveActivity(retryLabel(ev))
       if (ev.kind === 'hook' && ev.phase === 'started') setLiveActivity(`Running hook: ${ev.name}`)
       if (ev.kind === 'hook' && ev.phase === 'finished') {
@@ -1479,6 +1485,8 @@ export function App() {
     // Terminal-only commands (/login, /hooks, …) can't work in headless mode:
     // offer to open the chat in a real Claude Code terminal instead.
     const command = terminalOnlyCommand(combined)
+    // Signing in is done here, without a terminal.
+    if (command === '/login') { setSignIn('asked'); return }
     if (command !== null && !bypassTerminalCheck.current) {
       setTerminalPrompt({ command, text: combined, images })
       return
@@ -2003,6 +2011,7 @@ export function App() {
         <StartProjectSync workingDir={startingSync.workingDir} name={startingSync.name} encrypted={syncStatus?.encrypted ?? true}
           onClose={() => setStartingSync(null)} />
       )}
+      {signIn !== null && <SignInDialog reason={signIn} onClose={() => setSignIn(null)} />}
       {syncError !== null && (
         <div className="modal-overlay" role="presentation" onClick={() => setSyncError(null)}>
           <div className="modal sync-dialog" role="alertdialog" aria-label="Sync problem" onClick={e => e.stopPropagation()}>
