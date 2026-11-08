@@ -65,7 +65,7 @@ async function saveZip(e: IpcMainInvokeEvent, title: string, defaultName: string
 }
 
 export function registerManageIpc(db: Catalog, engine: EngineIpcHandle, paths: ClaudePaths = defaultPaths(),
-  onProjectFolderRenamed?: (from: string, to: string) => void): { dispose(): void } {
+  onProjectFolderRenamed?: (from: string, to: string) => void, onProjectDeleted?: (workingDir: string) => void): { dispose(): void } {
   const drives = fixedDrives()
   let remover: FileRemover | null = null
 
@@ -78,7 +78,8 @@ export function registerManageIpc(db: Catalog, engine: EngineIpcHandle, paths: C
     ownedSessionIds: () => engine.ownedProcesses().map(o => o.sessionId),
     stopOwned: ids => { engine.stopOwned(ids) },
     endExternal: sessions => endAll(sessions),
-    knownProjects: () => controller?.known() ?? null
+    knownProjects: () => controller?.known() ?? null,
+    projectDeleted: workingDir => onProjectDeleted?.(workingDir)
   }
   const wizard = new DeleteWizard(db, deps)
   controller = new ManageController(deps, {

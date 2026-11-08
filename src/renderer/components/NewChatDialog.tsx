@@ -344,13 +344,14 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
       {offer !== null && (
         <div className="modal-overlay" role="presentation" onClick={e => { e.stopPropagation(); if (offer.step !== 'loading') setOffer(null) }}>
           <div className="modal sync-dialog" role="dialog" aria-label={`Set up ${offer.row.label}`} onClick={e => e.stopPropagation()}>
-            <h2 className="modal-title">{offer.row.label} has synced chats</h2>
+            <h2 className="modal-title">{offer.row.sync?.chats === 0 ? `${offer.row.label} is synced, with no chats yet` : `${offer.row.label} has synced chats`}</h2>
             {offer.step === 'ask' && <>
               <p className="settings-note">
-                {offer.row.sync !== null
-                  ? `${offer.row.sync.chats} chat${offer.row.sync.chats === 1 ? '' : 's'}, last synced from ${offer.row.sync.from}. `
-                  : 'Another of your PCs syncs this project. '}
-                Bring them here and keep syncing it on this PC too?
+                {offer.row.sync === null
+                  ? 'Another of your PCs syncs this project. Bring its chats here and keep syncing it on this PC too?'
+                  : offer.row.sync.chats === 0
+                    ? `${offer.row.sync.from} syncs this project, but it has no chats to bring yet. Sync it here too, so chats from either PC show up on both?`
+                    : `${offer.row.sync.chats} chat${offer.row.sync.chats === 1 ? '' : 's'}, last synced from ${offer.row.sync.from}. Bring them here and keep syncing it on this PC too?`}
               </p>
               {offerError !== null && <div className="modal-error">{offerError}</div>}
               <div className="modal-actions">

@@ -1617,3 +1617,5 @@ html[data-custom-font] body *:not(pre):not(pre *):not(code) { font-family:var(--
 .sync-advanced { margin-top:18px; border-top:1px solid var(--line); padding-top:10px; }
 .sync-advanced > summary { cursor:pointer; color:var(--mu); font-size:13px; user-select:none; }
 .sync-advanced[open] > summary { margin-bottom:10px; }
+.composer-syncing-body { display:flex; flex-direction:column; gap:6px; flex:1; min-width:0; }
+.composer-syncing .sync-progress { margin-top:0; }

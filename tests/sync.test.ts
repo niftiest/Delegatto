@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { encodePath } from '../src/main/manage/paths'
 import { realRunner, type Runner } from '../src/main/engine/github'
-import { syncOffer, type EnableProgress } from '../src/shared/sync-types'
+import { syncOffer, type EnableProgress, type SyncIncoming } from '../src/shared/sync-types'
 import { pushProgressReader } from '../src/main/sync/git'
 import { SyncService, type KeyStore, type SyncHub } from '../src/main/sync/service'
 import { deriveKey, keyCheck, newKdf, newRecoveryKey, SyncCodec, verifyKeyCheck, WrongKeyError } from '../src/main/sync/crypto'
@@ -51,6 +51,7 @@ type Pc = {
   dataDir: string
   run: Runner
   titles: Map<string, string>
+  incoming: SyncIncoming[][]
 }
 
 function makePc(name: string, opts: { run?: Runner } = {}): Pc {
@@ -62,6 +63,7 @@ function makePc(name: string, opts: { run?: Runner } = {}): Pc {
   const external = new Set<string>()
   const stopped: string[] = []
   const titles = new Map<string, string>()
+  const incoming: SyncIncoming[][] = []
   const run = opts.run ?? realRunner
   const service = new SyncService({
     paths: tree.paths, run, hub, keys: memoryKeys(), dataDir, hostname: name,
@@ -76,9 +78,10 @@ function makePc(name: string, opts: { run?: Runner } = {}): Pc {
     setChatTitle: (file, title) => { titles.set(file, title) },
     trustFolder: () => {},
     onChange: () => {},
+    onIncoming: list => { incoming.push(list) },
     sleep: () => Promise.resolve()
   })
-  return { name, tree, service, busy, open, external, stopped, dataDir, run, titles }
+  return { name, tree, service, busy, open, external, stopped, dataDir, run, titles, incoming }
 }
 
 function userRow(cwd: string, sessionId: string, text: string): string {
@@ -534,6 +537,34 @@ describe('syncing between two PCs', () => {
     read('Enumerating objects: 5, done.\nWriting objects:  4')
     read('0% (2/5)\rWriting objects:  40% (2/5)\rWriting objects: 100% (5/5), 1.2 KiB | 1.2 MiB/s, done.\n')
     expect(got).toEqual([40, 100])
+  })
+
+  it('says which chat is getting messages from which PC, counts them in, then lets go', async () => {
+    const { a, b, rootA, sid } = await pair()
+    for (let i = 0; i < 3; i++) appendFileSync(chatFile(a, rootA, sid), `${userRow(rootA, sid, `more ${i}`)}\n`)
+    await ok(a.service.syncNow())
+    b.incoming.length = 0
+    await ok(b.service.syncNow())
+    const seen = b.incoming.flat().filter(i => i.sessionId === sid)
+    expect(seen[0]).toMatchObject({ phase: 'download', from: 'PC-A' })
+    const writes = seen.filter(i => i.phase === 'write')
+    expect(writes[0]).toMatchObject({ done: 0, total: 3, from: 'PC-A' })
+    expect(writes.at(-1)).toMatchObject({ done: 3, total: 3 })
+    expect(b.incoming.at(-1)).toEqual([])
+    expect(b.service.incomingChats()).toEqual([])
+
+    // Its own upload isn't news to itself.
+    a.incoming.length = 0
+    await ok(a.service.syncNow())
+    expect(a.incoming.flat()).toEqual([])
+  })
+
+  it('stops syncing a project on this PC when it is deleted here, and leaves GitHub alone', async () => {
+    const { b, rootB, projectId } = await pair()
+    await b.service.projectDeleted(rootB)
+    const status = await b.service.status()
+    expect(status.projects.some(p => p.projectId === projectId)).toBe(false)
+    expect(status.remoteProjects.some(p => p.projectId === projectId)).toBe(true)
   })
 
   it('does not bring back a chat deleted on this PC, or remove it from the other', async () => {

@@ -26,7 +26,7 @@ import { SettingsWindow, type SettingsSection } from './components/SettingsWindo
 import { BlockedBanner } from './components/BlockedBanner'
 import { SyncChatBanner, SyncConflictDialog, useSyncChat, useSyncOffer, useSyncStatus } from './components/SyncChat'
 import { StartProjectSync } from './components/SyncSettings'
-import { projectSyncState, type ProjectSyncState } from '../shared/sync-types'
+import { projectSyncState, type ProjectSyncState, type SyncIncoming } from '../shared/sync-types'
 import { RemoteBadge } from './components/RemoteBadge'
 import { DeleteWizard } from './components/DeleteWizard'
 import { UpdateBar, UpdateIcon } from './components/UpdatesPanel'
@@ -243,6 +243,23 @@ export function App() {
   // set, the composer is read-only. Seeded on open via api.getLock, then kept
   // current by engine:lockChanged.
   const [externalLock, setExternalLock] = useState<ExternalLock | null>(null)
+  // Chats getting messages from another PC. The open one can't be written to until they're
+  // in, and then it reloads to show them.
+  const [incoming, setIncoming] = useState<SyncIncoming[]>([])
+  useEffect(() => {
+    void api.syncIncoming().then(setIncoming).catch(() => {})
+    return api.onSyncIncoming(setIncoming)
+  }, [])
+  const syncingIn = session === null ? null : incoming.find(i => i.sessionId.toLowerCase() === session.sessionId.toLowerCase()) ?? null
+  const wasSyncingIn = useRef<string | null>(null)
+  useEffect(() => {
+    const now = syncingIn === null ? null : syncingIn.sessionId
+    if (wasSyncingIn.current !== null && now === null && session !== null && session.sessionId.toLowerCase() === wasSyncingIn.current.toLowerCase()) {
+      void openSessionRef.current(session)
+      refreshNavRef.current()
+    }
+    wasSyncingIn.current = now
+  }, [syncingIn?.sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Chats a live claude has under Remote Control (/rc) -- badged in the rail,
   // chat list, session list and chat header. App-wide, pushed by main.
   const [remote, setRemote] = useState<RemoteSession[]>([])
@@ -1936,7 +1953,7 @@ export function App() {
           // fresh Composer instance per session, so nothing bleeds from one
           // session into another. What's in progress survives the switch: text
           // via draftsRef, chips and the queue in composeStore.
-          <Composer key={`composer-${session.id}`} sessionPk={session.id} running={running} settled={settledPk === session.id} shellStops={shellStops} onCycleMode={() => { const next = nextPermissionMode(chatMode); changeChatMode(next); return permissionModeLabel(next) }} lock={externalLock} cwd={project?.cwd ?? null} suggestion={suggestion}
+          <Composer key={`composer-${session.id}`} sessionPk={session.id} running={running} settled={settledPk === session.id} shellStops={shellStops} onCycleMode={() => { const next = nextPermissionMode(chatMode); changeChatMode(next); return permissionModeLabel(next) }} lock={externalLock} syncing={syncingIn} cwd={project?.cwd ?? null} suggestion={suggestion}
             onShellCommand={command => { void api.shellRun(session.id, command) }}
             onHijack={async () => {
               const r = await api.hijackChat(session.id)

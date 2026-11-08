@@ -17,7 +17,7 @@ import { codeState, SyncGit } from './git'
 import { countImages, mergeFinding, redactSecrets, scanText } from './secret-scan'
 import { isSessionId, isTextFile, keyEndingAt, locateRow, readRows, rowKey } from './transcript'
 import type {
-  EnableProgress, FindingDecisions, GithubState, LinkOutcome, ProjectScan, RemoteProject, RepoSearch, ResolveOutcome, ScanProgress,
+  EnableProgress, SyncIncoming, FindingDecisions, GithubState, LinkOutcome, ProjectScan, RemoteProject, RepoSearch, ResolveOutcome, ScanProgress,
   SecretFinding, SetupOutcome, TurnOnOutcome, SyncChatInfo, SyncConflict, SyncDevice, SyncProjectRow, SyncResult, SyncStatus
 } from '../../shared/sync-types'
 
@@ -90,6 +90,8 @@ export type SyncDeps = {
   setChatTitle(filePath: string, title: string): void
   trustFolder(path: string): void
   onChange(): void
+  /** Which chats are getting messages from another PC, each time that changes. */
+  onIncoming?(list: SyncIncoming[]): void
   now?(): number
   sleep?(ms: number): Promise<void>
 }
@@ -261,6 +263,10 @@ export class SyncService {
   private lastError: string | null = null
   private lastCheckAt: number | null = null
   private repoSize: number | null = null
+  /** Chats getting messages from another PC in this pass, by session id. */
+  private incoming = new Map<string, SyncIncoming>()
+  private incomingSentAt = 0
+
   /** Set while a project's first sync runs, so its dialog can show how far along it is. */
   private enableProgress: { root: string; report: (p: EnableProgress) => void } | null = null
   private catalog = new Map<string, ProjectMeta>()
@@ -768,6 +774,17 @@ export class SyncService {
     })
   }
 
+  /** A project's Claude data was deleted on this PC: stop syncing it here, as De-sync does. Its
+   *  copy on GitHub stays for the other PCs, and New chat can bring it back. */
+  projectDeleted(workingDir: string): Promise<SyncResult> {
+    return this.guarded('Stopping sync for a deleted project', async () => {
+      const p = Object.values(this.state.projects).find(x => isSamePath(x.root, normalizePath(workingDir)))
+      if (p === undefined) return
+      this.forgetProject(p.projectId)
+      if (this.git !== null) await this.applySparse()
+    })
+  }
+
   private forgetProject(projectId: string): void {
     delete this.state.projects[projectId]
     for (const [id, chat] of Object.entries(this.state.chats)) if (chat.projectId === projectId) delete this.state.chats[id]
@@ -1032,15 +1049,63 @@ export class SyncService {
     return false
   }
 
+  incomingChats(): SyncIncoming[] {
+    return [...this.incoming.values()]
+  }
+
+  private sendIncoming(force: boolean): void {
+    // Progress while writing comes often; a few updates a second is plenty.
+    if (!force && this.now() - this.incomingSentAt < 150) return
+    this.incomingSentAt = this.now()
+    this.deps.onIncoming?.(this.incomingChats())
+  }
+
+  /** Notes the chats a pull is about to change, from the list of files it changes. Only ones this
+   *  PC syncs and still has, and only what another PC wrote. */
+  private markIncoming(paths: string[], lastBy: string | null): void {
+    const deviceId = lastBy?.endsWith(' sync') === true ? lastBy.slice(0, -' sync'.length) : null
+    if (deviceId === this.state.deviceId) return
+    const named = this.devices.find(d => d.id === deviceId)?.name ?? null
+    let added = false
+    for (const path of paths) {
+      const m = /^data\/([^/]+)\/chats\/([^/]+)\//.exec(path)
+      if (m === null || this.state.projects[m[1]!] === undefined || !isSessionId(m[2]!)) continue
+      if (this.state.chats[m[2]!]?.localDeleted === true || this.incoming.has(m[2]!)) continue
+      // The PCs list may not have loaded yet; the chat itself knows who wrote to it last.
+      const meta = this.chatMeta.get(m[2]!)
+      const from = named ?? (meta !== undefined && meta.deviceId === deviceId ? meta.device : 'another PC')
+      this.incoming.set(m[2]!, { sessionId: m[2]!, from, phase: 'download', done: 0, total: 0 })
+      added = true
+    }
+    if (added) this.sendIncoming(true)
+  }
+
+  /** Once a pass is over, the chats it changed are listed again before they're let go, so a
+   *  chat reloads with its new messages rather than without them. */
+  private async finishIncoming(): Promise<void> {
+    if (this.incoming.size === 0) return
+    await this.refreshCatalogue().catch(() => {})
+    this.incoming.clear()
+    this.sendIncoming(true)
+  }
+
   /** Download what's new, upload what's new. Git refuses a push from a PC that's behind,
    *  even if two push at the same moment, and then the whole pass is simply redone. */
   private async cycle(): Promise<void> {
+    try {
+      await this.cycleOnce()
+    } finally {
+      await this.finishIncoming()
+    }
+  }
+
+  private async cycleOnce(): Promise<void> {
     this.requireRepo()
     const git = this.git!
     for (let attempt = 1; attempt <= PUSH_ATTEMPTS; attempt++) {
       const watch = this.enableProgress
       watch?.report({ workingDir: watch.root, phase: 'download', done: 0, total: 0 })
-      const main = await git.pull()
+      const main = await git.pull((paths, lastBy) => this.markIncoming(paths, lastBy))
       this.checkRepoKey()
       await this.loadCatalog()
       const pending: Array<() => void> = []
@@ -1236,7 +1301,13 @@ export class SyncService {
     let indexChanged = false
     if (remoteNew > 0 && index !== null) {
       if (!await this.closeForChange(sessionId)) { this.state.chats[sessionId] = st; return false }
-      await this.appendRemoteRows(p, sessionId, index, st, file)
+      const from = index.device.name
+      const progress = (done: number): void => {
+        this.incoming.set(sessionId, { sessionId, from, phase: 'write', done, total: remoteNew })
+        this.sendIncoming(done === 0 || done === remoteNew)
+      }
+      progress(0)
+      await this.appendRemoteRows(p, sessionId, index, st, file, progress)
       stat = await statOrNull(file)
       changedHere = true
     }
@@ -1304,7 +1375,7 @@ export class SyncService {
     return true
   }
 
-  private async appendRemoteRows(p: ProjectState, sessionId: string, index: ChatIndex, st: ChatState, file: string): Promise<void> {
+  private async appendRemoteRows(p: ProjectState, sessionId: string, index: ChatIndex, st: ChatState, file: string, progress?: (done: number) => void): Promise<void> {
     await fsp.mkdir(dirname(file), { recursive: true })
     const current = await statOrNull(file)
     if (current !== null && current.size > 0) {
@@ -1320,6 +1391,7 @@ export class SyncService {
     let translate: (line: string) => string = line => line
     let translating: ChunkEntry | null = null
     let lastKey = st.baseKey
+    let written = 0
     const flush = async (): Promise<void> => {
       if (parts.length === 0) return
       await fsp.appendFile(file, parts.join(''))
@@ -1342,6 +1414,7 @@ export class SyncService {
       held += line.length
       lastKey = rowKey(line)
       if (held > CHUNK_BYTES) await flush()
+      progress?.(++written)
     }
     await flush()
     const after = await fsp.stat(file)

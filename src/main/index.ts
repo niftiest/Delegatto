@@ -177,7 +177,8 @@ function createWindow(): void {
     ask: request => dialogs!.ask(request)
   })
   sync = registerSyncIpc(db, win, engine)
-  const manage = registerManageIpc(db, engine, undefined, (from, to) => { void sync?.projectFolderRenamed(from, to) })
+  const manage = registerManageIpc(db, engine, undefined, (from, to) => { void sync?.projectFolderRenamed(from, to) },
+    workingDir => { void sync?.projectDeleted(workingDir) })
   const claudeSettings = registerClaudeSettingsIpc(db, win, engine)
   const updater = registerUpdater(win, {
     autoCheck: () => getSettings(db).autoCheckUpdates,

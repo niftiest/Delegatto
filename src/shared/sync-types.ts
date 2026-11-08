@@ -13,6 +13,8 @@ export const SYNC_IPC = {
   scanProgress: 'sync:scanProgress',
   enableProject: 'sync:enableProject',
   enableProgress: 'sync:enableProgress',
+  incoming: 'sync:incoming',
+  incomingNow: 'sync:incomingNow',
   disableProject: 'sync:disableProject',
   linkProject: 'sync:linkProject',
   syncNow: 'sync:now',
@@ -56,6 +58,11 @@ export type ProjectScan = {
 }
 
 export type ScanProgress = { workingDir: string; done: number; total: number }
+
+/** A chat getting messages from another PC. While it is, it can't be written to here: the
+ *  chat box waits, and the chat reloads once they're in. `download` has no total yet;
+ *  `write` counts the messages added so far. */
+export type SyncIncoming = { sessionId: string; from: string; phase: 'download' | 'write'; done: number; total: number }
 
 /** A project's first sync. `pack` counts chats; `upload` counts percent; `download` has no total. */
 export type EnableProgress = { workingDir: string; phase: 'download' | 'pack' | 'upload'; done: number; total: number }
@@ -226,6 +233,9 @@ export type SyncApi = {
   onSyncScanProgress(cb: (p: ScanProgress) => void): () => void
   syncEnableProject(workingDir: string, decisions: FindingDecisions): Promise<SyncResult>
   onSyncEnableProgress(cb: (p: EnableProgress) => void): () => void
+  /** Chats getting messages from another PC right now. */
+  syncIncoming(): Promise<SyncIncoming[]>
+  onSyncIncoming(cb: (list: SyncIncoming[]) => void): () => void
   syncDisableProject(projectId: string): Promise<SyncResult>
   syncLinkProject(projectId: string, folder: string): Promise<LinkOutcome>
   syncNow(): Promise<SyncResult>

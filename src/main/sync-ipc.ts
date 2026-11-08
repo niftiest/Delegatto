@@ -103,6 +103,7 @@ export type SyncIpcHandle = {
   dispose(): void
   turnEnded(sessionPk: number): void
   projectFolderRenamed(fromEncoded: string, toEncoded: string): Promise<void>
+  projectDeleted(workingDir: string): Promise<void>
 }
 
 export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: EngineIpcHandle, paths: ClaudePaths = defaultPaths()): SyncIpcHandle {
@@ -140,6 +141,7 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
       const current = getSettings(db).trustedFolders
       if (!current.includes(folder)) updateSettings(db, { trustedFolders: [...current, folder] })
     },
+    onIncoming: list => send(SYNC_IPC.incoming, list),
     onChange: () => {
       // Coalesced: the status walks the project folders.
       if (pushTimer !== null) return
@@ -194,6 +196,7 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
     [SYNC_IPC.startFresh]: () => service.startFresh(),
     [SYNC_IPC.recoveryKey]: () => service.recoveryKey(),
     [SYNC_IPC.turnOn]: (_e, key: string | null) => service.turnOn(typeof key === 'string' ? key : null),
+    [SYNC_IPC.incomingNow]: () => service.incomingChats(),
     [SYNC_IPC.replaceRecoveryKey]: () => service.replaceRecoveryKey(),
     [SYNC_IPC.disconnect]: () => service.disconnect()
   }
@@ -216,6 +219,7 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
       afterTurn = setTimeout(check, AFTER_TURN_MS)
     },
     projectFolderRenamed: (from, to) => service.projectFolderRenamed(from, to),
+    projectDeleted: async workingDir => { await service.projectDeleted(workingDir) },
     dispose() {
       clearTimeout(first)
       clearInterval(every)

@@ -74,11 +74,21 @@ export class SyncGit {
     return (await this.listRemote()).main
   }
 
-  /** Makes the local copy exactly what's on GitHub. Nothing of value lives only here. */
-  async pull(): Promise<string | null> {
+  /** Makes the local copy exactly what's on GitHub. Nothing of value lives only here.
+   *  `onIncoming` hears which files are about to change, and which PC changed them last, before
+   *  their contents download: the fetch only brings what changed, the reset brings the bytes. */
+  async pull(onIncoming?: (paths: string[], lastBy: string | null) => void): Promise<string | null> {
     const main = await this.remoteMain()
     if (main === null) return null
     await this.git(['fetch', '-q', 'origin', '+refs/heads/main:refs/remotes/origin/main'], { network: true })
+    if (onIncoming !== undefined && await this.currentHead() !== null) {
+      const diff = await this.git(['diff', '--name-only', '--no-renames', 'HEAD', 'origin/main'], { allowFail: true })
+      const paths = diff.code === 0 ? diff.stdout.split('\n').map(l => l.trim()).filter(l => l.length > 0) : []
+      if (paths.length > 0) {
+        const subject = await this.git(['log', '-1', '--format=%s', 'origin/main'], { allowFail: true })
+        onIncoming(paths, subject.code === 0 ? subject.stdout.trim() : null)
+      }
+    }
     await this.git(['reset', '-q', '--hard', 'origin/main'], { network: true })
     await this.git(['clean', '-fdq'])
     return main

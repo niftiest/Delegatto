@@ -10,7 +10,7 @@ import type { StreamedRow } from '../main/jsonl/stream'
 import { MANAGE_IPC, type ContentSearchEvent, type ManageApi } from '../shared/manage-types'
 import { UPDATE_IPC, type UpdateApi, type UpdateStatus } from '../shared/update-types'
 import { CLAUDE_SETTINGS_IPC, type AutoCleanResult, type ClaudeSettingsApi } from '../shared/claude-settings-types'
-import { SYNC_IPC, type EnableProgress, type ScanProgress, type SyncApi, type SyncStatus } from '../shared/sync-types'
+import { SYNC_IPC, type EnableProgress, type SyncIncoming, type ScanProgress, type SyncApi, type SyncStatus } from '../shared/sync-types'
 
 const api: DelegattoApi & EngineApi = {
   listProjects: () => ipcRenderer.invoke(IPC.listProjects),
@@ -283,6 +283,12 @@ const sync: SyncApi = {
     return () => { ipcRenderer.off(SYNC_IPC.scanProgress, listener) }
   },
   syncEnableProject: (dir, decisions) => ipcRenderer.invoke(SYNC_IPC.enableProject, dir, decisions),
+  syncIncoming: () => ipcRenderer.invoke(SYNC_IPC.incomingNow),
+  onSyncIncoming: cb => {
+    const listener = (_e: IpcRendererEvent, list: SyncIncoming[]) => cb(list)
+    ipcRenderer.on(SYNC_IPC.incoming, listener)
+    return () => { ipcRenderer.off(SYNC_IPC.incoming, listener) }
+  },
   onSyncEnableProgress: cb => {
     const listener = (_e: IpcRendererEvent, p: EnableProgress) => cb(p)
     ipcRenderer.on(SYNC_IPC.enableProgress, listener)

@@ -8,6 +8,7 @@ import {
 import { composeStore, nextHeld, shellCommandOf } from '../compose-store'
 import { filterHistory, stepHistory } from '../prompt-history'
 import type { ExternalLock } from '../../shared/engine-types'
+import type { SyncIncoming } from '../../shared/sync-types'
 import { HIJACK_WORKING_TEXT, hijackBlock } from '../../shared/hijack'
 import type { ClaudeCommand, CommandSource } from '../../shared/claude-info-types'
 import { CompletionMenu, useClaudeCommands, useProjectFiles, type MenuItem } from './ComposerMenu'
@@ -76,7 +77,7 @@ function lockHolder(lock: ExternalLock): string {
   return `${who} (PID ${lock.pid})`
 }
 
-export function Composer({ sessionPk, running, settled = false, shellStops = 0, onCycleMode, lock = null, cwd = null, suggestion = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange }: {
+export function Composer({ sessionPk, running, settled = false, shellStops = 0, onCycleMode, lock = null, syncing = null, cwd = null, suggestion = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange }: {
   /** True while a turn is in flight for this session. Enter queues instead
    *  of sending, and Esc interrupts, only while this is true. */
   running: boolean
@@ -90,6 +91,9 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
    *  goes read-only (typing/sending disabled, queued messages held, not
    *  drained) until it's released. Any draft text is kept. */
   lock?: ExternalLock | null
+  /** Set while messages from another PC are being added to this chat: nothing can be sent
+   *  until they're in, and the chat reloads to show them. Any draft text is kept. */
+  syncing?: SyncIncoming | null
   /** The chat's folder: where / commands and @ files come from. */
   cwd?: string | null
   /** Ends the terminal holding this chat. Resolves to why it couldn't, or null. */
@@ -147,6 +151,7 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
   const [hijacking, setHijacking] = useState(false)
   const [hijackError, setHijackError] = useState<string | null>(null)
   const hijackState = lock === null ? null : hijackBlock(lock)
+  const blocked = lock !== null || syncing !== null
   useEffect(() => { if (hijackState !== null) setHijackConfirm(false) }, [hijackState])
   useEffect(() => { if (lock === null) { setHijackConfirm(false); setHijackError(null) } }, [lock])
   async function hijack() {
@@ -166,7 +171,7 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
   const [selected, setSelected] = useState(0)
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
   const pendingCaret = useRef<number | null>(null)
-  const completion = lock === null && dismissedFor !== text ? completionAt(text, caret) : null
+  const completion = !blocked && dismissedFor !== text ? completionAt(text, caret) : null
   const commands = useClaudeCommands(text.startsWith('/'), cwd)
   const files = useProjectFiles(completion?.kind === 'file', cwd)
   const knownCommands = useMemo(() => Array.isArray(commands) ? commands : [], [commands])
@@ -194,7 +199,7 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
     pendingCaret.current = null
   }, [text])
 
-  const showSuggestion = suggestion !== null && text === '' && !running && lock === null
+  const showSuggestion = suggestion !== null && text === '' && !running && !blocked
   function useSuggestion() {
     if (suggestion === null) return
     pendingCaret.current = suggestion.length
@@ -238,16 +243,16 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
   const prevRunning = useRef(running)
   useEffect(() => {
     const next = nextHeld(queue)
-    if (prevRunning.current && !running && next !== undefined && lock === null) sendHeld(next)
+    if (prevRunning.current && !running && next !== undefined && !blocked) sendHeld(next)
     prevRunning.current = running
-  }, [running, queue, onSend, lock]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [running, queue, onSend, lock, syncing]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const seenStops = useRef(shellStops)
   useEffect(() => {
     if (seenStops.current === shellStops) return
     seenStops.current = shellStops
     const next = nextHeld(queue)
-    if (!running && next !== undefined && lock === null) sendHeld(next)
+    if (!running && next !== undefined && !blocked) sendHeld(next)
   }, [shellStops]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A turn that ended while this chat wasn't on screen left no transition to see, so
@@ -257,8 +262,18 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
     if (!settled || checkedOnOpen.current) return
     checkedOnOpen.current = true
     const next = nextHeld(queue)
-    if (!running && next !== undefined && lock === null) sendHeld(next)
-  }, [settled]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!running && next !== undefined && !blocked) sendHeld(next)
+  }, [settled])
+
+  // A message held while messages came in from another PC goes once they're in.
+  const wasSyncing = useRef(syncing !== null)
+  useEffect(() => {
+    const was = wasSyncing.current
+    wasSyncing.current = syncing !== null
+    if (!was || syncing !== null || lock !== null || running) return
+    const next = nextHeld(queue)
+    if (next !== undefined) sendHeld(next)
+  }, [syncing]) // eslint-disable-line react-hooks/exhaustive-deps // eslint-disable-line react-hooks/exhaustive-deps
 
   // Follows the queue's messages through Claude Code.
   const queueRef = useRef(queue)
@@ -439,7 +454,7 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
     // queued.
     const wouldSend = buildOutgoingText(text, pastedChips)
     if (wouldSend.trim().length === 0 && imageChips.length === 0) return
-    if (lock !== null) return
+    if (blocked) return
     onSubmit?.()
     if (onShellCommand !== undefined && wouldSend.trimStart().startsWith('!')) {
       const command = wouldSend.trimStart().slice(1).trim()
@@ -648,12 +663,27 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
           )}
         </div>
       )}
+      {syncing !== null && lock === null && (
+        <div className="composer-lock composer-syncing" role="status">
+          <span className="composer-lock-icon" aria-hidden="true">⟳</span>
+          <span className="composer-syncing-body">
+            <span>{syncing.phase === 'download'
+              ? `Getting new messages from ${syncing.from}…`
+              : `Adding ${syncing.total} new message${syncing.total === 1 ? '' : 's'} from ${syncing.from}: ${syncing.done} of ${syncing.total}`}
+              {' '}You can type again once they’re in.</span>
+            <span className={`sync-progress${syncing.phase === 'download' || syncing.total === 0 ? ' busy' : ''}`} role="progressbar" aria-label="Syncing this chat"
+              aria-valuemin={0} aria-valuemax={100} aria-valuenow={syncing.total > 0 ? Math.round(syncing.done / syncing.total * 100) : undefined}>
+              <i style={syncing.phase === 'write' && syncing.total > 0 ? { width: `${Math.round(syncing.done / syncing.total * 100)}%` } : undefined} />
+            </span>
+          </span>
+        </div>
+      )}
       {showSuggestion && (
         <button type="button" className="composer-suggestion" title="Tab or click to use it; it won’t send until you press Enter" onClick={useSuggestion}>
           <span aria-hidden="true">✦</span> {suggestion}
         </button>
       )}
-      <div className={`composer-box${lock !== null ? ' composer-box-locked' : ''}`} onDragOver={handleDragOver} onDrop={handleDrop}>
+      <div className={`composer-box${blocked ? ' composer-box-locked' : ''}`} onDragOver={handleDragOver} onDrop={handleDrop}>
         <div className="composer-field">
           {highlight > 0 && (
             <div ref={highlightRef} className="composer-highlight" aria-hidden="true">
@@ -663,8 +693,8 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
           <textarea
             ref={textareaRef}
             className="composer-input"
-            placeholder={lock !== null ? 'Chat is open elsewhere' : 'Message Claude  ·  / for commands  ·  @ for files  ·  ! for a shell command'}
-            disabled={lock !== null}
+            placeholder={lock !== null ? 'Chat is open elsewhere' : syncing !== null ? 'Syncing new messages…' : 'Message Claude  ·  / for commands  ·  @ for files  ·  ! for a shell command'}
+            disabled={blocked}
             value={text}
             rows={1}
             onChange={e => { setCaret(e.target.selectionStart); clearArmedAt.current = 0; setClearHint(false); updateText(e.target.value) }}
@@ -675,7 +705,7 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
           />
         </div>
         <button type="button" className="composer-send" title="Send" aria-label="Send message"
-          disabled={lock !== null} onClick={attemptSend}>
+          disabled={blocked} onClick={attemptSend}>
           ➤
         </button>
       </div>

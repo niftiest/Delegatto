@@ -88,6 +88,18 @@ describe('DeleteWizard, several projects', () => {
     expect(projectRows(db)).toEqual([encodePath(c)])
   })
 
+  it('tells sync about each project it deleted, and only those', async () => {
+    const t = tree()
+    const { a, b } = twoProjects(t)
+    const deleted: string[] = []
+    const w = new DeleteWizard(catalogWith([]), deps(t, [], { projectDeleted: wd => deleted.push(wd) }))
+    const target = { scope: 'projects' as const, dirNames: [encodePath(a)] }
+    const plan = await w.plan(target)
+    await w.execute(target, plan.items.filter(i => i.defaultSelected && i.containedIn === null).map(i => i.key), false)
+    expect(deleted).toEqual([a])
+    expect(deleted).not.toContain(b)
+  })
+
   it('refuses while any session runs, before the restore point and before any change', async () => {
     const t = tree()
     const { a, b } = twoProjects(t)

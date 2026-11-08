@@ -31,6 +31,8 @@ export type ManageDeps = {
   endExternal: (sessions: LiveSession[]) => Promise<TerminateResult>
   /** The Manage screen's last project scan, when there is one (saves a rescan). */
   knownProjects?: () => ProjectInfo[] | null
+  /** A project's Claude data was deleted here, so anything that follows it, such as sync, stops. */
+  projectDeleted?: (workingDir: string) => void
 }
 
 export function processView(deps: Pick<ManageDeps, 'ownedSessionIds'>): (s: LiveSession) => WizardProcess {
@@ -232,6 +234,7 @@ export class DeleteWizard {
         const blocking = this.sessionCheck(r).blocking
         if (blocking.length > 0) return { ok: false, error: `${blocking.length} Claude Code session(s) still running. Close them first.`, sessions: blocking }
         r.forget()
+        if (target.scope === 'project') this.deps.projectDeleted?.(r.workingDir)
         return { ok: true, done: [r.workingDir], failures: [], backupDir: null, restorePoint: null }
       }
       const svc = this.service(await this.deps.getRemover())
@@ -280,7 +283,10 @@ export class DeleteWizard {
       } else {
         for (const b of batch) {
           const folder = b.selected.find(a => a.kind === 'ProjectFolder')
-          if (folder !== undefined && result.done.includes(folder.path)) removeProjectFromCatalog(this.db, b.project.encodedName)
+          if (folder !== undefined && result.done.includes(folder.path)) {
+            removeProjectFromCatalog(this.db, b.project.encodedName)
+            this.deps.projectDeleted?.(b.project.workingDir)
+          }
         }
       }
       return { ok: true, done: result.done, failures: result.failures, backupDir: result.backupDir, restorePoint: zip }
