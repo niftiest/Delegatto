@@ -95,6 +95,9 @@ export type DeletePlan = {
   /** Things the review step must point out (e.g. another working dir sharing
    *  the encoded project folder, projects with no Claude data). */
   warnings: string[]
+  /** Set when Claude's files for it are already gone and only Delegatto's saved copy of its
+   *  chats is left, so deleting just takes it off the list. */
+  listOnly?: { chats: number }
 }
 
 export type SessionCheck = { blocking: WizardProcess[]; allLive: WizardProcess[] }

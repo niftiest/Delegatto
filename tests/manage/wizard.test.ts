@@ -119,6 +119,37 @@ describe('DeleteWizard, several projects', () => {
     expect(keys).toEqual([only + '.com'])
   })
 
+  it('takes a project off the list when its Claude data is already gone', async () => {
+    const t = tree()
+    const gone = encodePath('D:\\Gone\\Project')
+    const db = catalogWith([gone, 'Kept'])
+    const live: LiveSession[] = [{ pid: 4242, sessionId: 'unrelated', cwd: 'C:\\x', name: 't', procStart: null }]
+    const w = new DeleteWizard(db, deps(t, live))
+    const target = { scope: 'project' as const, dirName: gone }
+    const plan = await w.plan(target)
+    expect(plan.listOnly).toEqual({ chats: 1 })
+    expect(plan.items).toEqual([])
+    expect(plan.blocking).toEqual([]) // an unrelated session doesn't hold it up
+    const r = await w.execute(target, [], true)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.restorePoint).toBeNull()
+    expect(projectRows(db)).toEqual(['Kept'])
+    await expect(w.plan(target)).rejects.toThrow('already deleted')
+  })
+
+  it('takes a chat off the list when its project\'s Claude data is already gone', async () => {
+    const t = tree()
+    const db = catalogWith([encodePath('D:\\Gone\\Project')])
+    const pk = (db.prepare('SELECT id FROM sessions').get() as { id: number }).id
+    const w = new DeleteWizard(db, deps(t))
+    const plan = await w.plan({ scope: 'chat', sessionPk: pk })
+    expect(plan.listOnly).toEqual({ chats: 1 })
+    const r = await w.execute({ scope: 'chat', sessionPk: pk }, [], false)
+    expect(r.ok).toBe(true)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM sessions').get()).toEqual({ c: 0 })
+  })
+
   it('rejects folder names that are not one plain path segment', async () => {
     const t = tree()
     const w = new DeleteWizard(catalogWith([]), deps(t))

@@ -52,7 +52,7 @@ export function DeleteWizard({ target, onClose, onDeleted }: {
   // Which processes must be closed: the project's/chat's own, or -- when the
   // delete edits .claude.json / history.jsonl -- every running session.
   const needsAllClosed = (p: DeletePlan, sel: Set<string>): boolean =>
-    p.target.scope !== 'chat' || p.items.some(i => i.sharedEdit && sel.has(i.key))
+    p.listOnly === undefined && (p.target.scope !== 'chat' || p.items.some(i => i.sharedEdit && sel.has(i.key)))
   const relevant = (p: DeletePlan, sel: Set<string>, check: { blocking: WizardProcess[]; allLive: WizardProcess[] }): WizardProcess[] =>
     needsAllClosed(p, sel) ? check.allLive : check.blocking
 
@@ -142,13 +142,13 @@ export function DeleteWizard({ target, onClose, onDeleted }: {
         <h2 className="modal-title dw-title">{plan?.title ?? (loadError !== null ? 'Delete' : 'Preparing…')}</h2>
         {plan !== null && <div className="dw-sub">{plan.workingDir}</div>}
 
-        <ol className="dw-steps" aria-label="Steps">
+        {plan?.listOnly === undefined && <ol className="dw-steps" aria-label="Steps">
           {STEPS.map((s, i) => (
             <li key={s.id} className={i < stepIndex ? 'done' : i === stepIndex ? 'current' : ''}>
               <span className="dw-step-num">{i < stepIndex ? '✓' : i + 1}</span>{s.label}
             </li>
           ))}
-        </ol>
+        </ol>}
 
         {loadError !== null && (
           <>
@@ -206,7 +206,21 @@ export function DeleteWizard({ target, onClose, onDeleted }: {
           </section>
         )}
 
-        {plan !== null && step === 'backup' && (
+        {plan?.listOnly !== undefined && (step === 'backup' || step === 'review') && (
+          <section className="dw-body">
+            <p className="dw-note">
+              Claude’s own files for this are already gone, so there’s nothing left on disk to delete.
+              {' '}Delegatto still has a saved copy of {plan.listOnly.chats === 1 ? 'its chat' : `its ${plan.listOnly.chats} chats`}, which is why it’s still in the list.
+            </p>
+            <p className="dw-note">Deleting removes that copy and takes it off the list. This can’t be undone.</p>
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+              <button type="button" className="btn-danger" onClick={() => void runDelete()}>Delete</button>
+            </div>
+          </section>
+        )}
+
+        {plan !== null && plan.listOnly === undefined && step === 'backup' && (
           <section className="dw-body">
             <label className="dw-check">
               <input type="checkbox" checked={restorePoint} onChange={e => setRestorePoint(e.target.checked)} />
@@ -229,7 +243,7 @@ export function DeleteWizard({ target, onClose, onDeleted }: {
           </section>
         )}
 
-        {plan !== null && step === 'review' && (
+        {plan !== null && plan.listOnly === undefined && step === 'review' && (
           <section className="dw-body">
             <p className="dw-note">Everything Claude keeps for this. Your working folder itself is never deleted.</p>
             {plan.warnings.map(w => <p key={w} className="dw-warn">{w}</p>)}
@@ -273,7 +287,7 @@ export function DeleteWizard({ target, onClose, onDeleted }: {
 
         {step === 'deleting' && (
           <section className="dw-body">
-            <p className="dw-note">{restorePoint ? 'Saving the restore point, then deleting…' : 'Deleting…'}</p>
+            <p className="dw-note">{restorePoint && plan?.listOnly === undefined ? 'Saving the restore point, then deleting…' : 'Deleting…'}</p>
             <div className="dw-progress"><i /></div>
           </section>
         )}
@@ -283,7 +297,7 @@ export function DeleteWizard({ target, onClose, onDeleted }: {
             {outcome.ok ? (
               <>
                 <p className={outcome.failures.length === 0 ? 'dw-ok' : 'dw-warn'}>
-                  {outcome.failures.length === 0
+                  {plan?.listOnly !== undefined ? 'Done. It’s off the list.' : outcome.failures.length === 0
                     ? `Done. ${outcome.done.length} item${outcome.done.length === 1 ? '' : 's'} removed.`
                     : `${outcome.done.length} removed, ${outcome.failures.length} could not be.`}
                 </p>

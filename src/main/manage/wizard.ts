@@ -77,6 +77,8 @@ function toItem(a: PlannedArtifact, key: string, group: string | null): WizardIt
 type Resolved =
   | { kind: 'chat'; project: ProjectInfo; projectDir: string; sessionId: string; title: string; sessionPk: number }
   | { kind: 'projects'; projects: ProjectInfo[]; title: string; missing: string[] }
+  /** Claude's files are already gone; only the catalog's copy is left. */
+  | { kind: 'listOnly'; title: string; workingDir: string; sessionIds: string[]; forget: () => void }
 
 /** A projects-folder name the renderer sent: one plain path segment. */
 function validDirName(n: unknown): n is string {
@@ -96,16 +98,31 @@ export class DeleteWizard {
         FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?
       `).get(target.sessionPk) as { filePath: string; sessionId: string; title: string | null; dirName: string } | undefined
       if (row === undefined) throw new Error('That chat is no longer in the catalog.')
-      const project = await scanProject(paths, row.dirName)
-      if (project === null) throw new Error("That chat's project folder no longer exists.")
       const name = row.title ?? row.sessionId.slice(0, 8)
+      const project = await scanProject(paths, row.dirName)
+      if (project === null) {
+        const cwd = (this.db.prepare('SELECT cwd FROM projects WHERE dir_name = ?').get(row.dirName) as { cwd: string | null } | undefined)?.cwd
+        return {
+          kind: 'listOnly', title: `Delete chat “${name.length > 60 ? name.slice(0, 57) + '…' : name}”`, workingDir: cwd ?? row.dirName,
+          sessionIds: [row.sessionId], forget: () => removeChatFromCatalog(this.db, target.sessionPk)
+        }
+      }
       return { kind: 'chat', project, projectDir: dirname(row.filePath), sessionId: row.sessionId, sessionPk: target.sessionPk,
         title: `Delete chat “${name.length > 60 ? name.slice(0, 57) + '…' : name}”` }
     }
     if (target.scope === 'project') {
       if (!validDirName(target.dirName)) throw new Error('That is not a project folder name.')
       const project = await scanProject(paths, target.dirName)
-      if (project === null) throw new Error('That project folder no longer exists.')
+      if (project === null) {
+        const dirName = target.dirName
+        const row = this.db.prepare('SELECT id, cwd FROM projects WHERE dir_name = ?').get(dirName) as { id: number; cwd: string | null } | undefined
+        if (row === undefined) throw new Error('That project was already deleted.')
+        const ids = (this.db.prepare('SELECT session_id AS s FROM sessions WHERE project_id = ?').all(row.id) as Array<{ s: string }>).map(r => r.s)
+        return {
+          kind: 'listOnly', title: `Delete project ${row.cwd ?? dirName}`, workingDir: row.cwd ?? dirName,
+          sessionIds: ids, forget: () => removeProjectFromCatalog(this.db, dirName)
+        }
+      }
       return { kind: 'projects', projects: [project], missing: [], title: `Delete project ${project.workingDir}` }
     }
     const names = Array.isArray(target.dirNames) ? target.dirNames : []
@@ -138,9 +155,9 @@ export class DeleteWizard {
   private sessionCheck(r: Resolved): SessionCheck {
     const all = this.deps.live()
     const view = this.view()
-    const mine = r.kind === 'chat'
-      ? all.filter(s => s.sessionId.toLowerCase() === r.sessionId.toLowerCase())
-      : all.filter(s => r.projects.some(p => p.sessionIds.some(id => id.toLowerCase() === s.sessionId.toLowerCase())))
+    const ids = r.kind === 'chat' ? [r.sessionId] : r.kind === 'listOnly' ? r.sessionIds : r.projects.flatMap(p => p.sessionIds)
+    const wanted = new Set(ids.map(id => id.toLowerCase()))
+    const mine = all.filter(s => wanted.has(s.sessionId.toLowerCase()))
     return { blocking: mine.map(view), allLive: all.map(view) }
   }
 
@@ -165,6 +182,12 @@ export class DeleteWizard {
     const r = await this.resolve(target)
     const svc = this.service(await this.deps.getRemover())
     const check = this.sessionCheck(r)
+    if (r.kind === 'listOnly') {
+      return {
+        target, title: r.title, workingDir: r.workingDir, items: [], ...check, restorePointBytes: 0, warnings: [],
+        listOnly: { chats: r.sessionIds.length }
+      }
+    }
     if (r.kind === 'chat') {
       const planned = await svc.planChat(r.projectDir, r.sessionId)
       return {
@@ -205,6 +228,12 @@ export class DeleteWizard {
     const view = this.view()
     try {
       const r = await this.resolve(target)
+      if (r.kind === 'listOnly') {
+        const blocking = this.sessionCheck(r).blocking
+        if (blocking.length > 0) return { ok: false, error: `${blocking.length} Claude Code session(s) still running. Close them first.`, sessions: blocking }
+        r.forget()
+        return { ok: true, done: [r.workingDir], failures: [], backupDir: null, restorePoint: null }
+      }
       const svc = this.service(await this.deps.getRemover())
       const keys = new Set(selectedKeys)
 
