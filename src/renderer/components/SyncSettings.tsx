@@ -71,6 +71,18 @@ export function SyncSettings() {
 
       {message !== null && <div className="modal-error">{message}</div>}
 
+      {status.encrypted && (status.hasRecoveryKey
+        ? <RecoveryKeyReveal />
+        : (
+          <div className="sync-card">
+            <div className="sync-card-title">Recovery key</div>
+            <p className="settings-note">This PC doesn’t have the recovery key saved. It was set up before Delegatto kept a copy. If no PC has it, make a new one here.</p>
+            <DangerButton label="Make a new recovery key" busy={status.busy}
+              confirm="This encrypts everything in the sync repo again under a new key, and removes its old history, which used the old key. Your chats stay. Other PCs stop syncing until you disconnect them and link them again with the new key."
+              onConfirm={() => void api.syncReplaceRecoveryKey().then(r => { if (r.ok) { setMessage(null); setRecoveryKey(r.recoveryKey) } else setMessage(r.error) })} />
+          </div>
+        ))}
+
       <label className="settings-row">
         <div className="settings-row-label">This PC’s name<span className="settings-hint">Shown on other PCs, as in “Open on {status.deviceName}”.</span></div>
         <input type="text" defaultValue={status.deviceName} placeholder={status.hostname}
@@ -177,6 +189,37 @@ export function SyncSettings() {
       )}
       {linking !== null && <LinkDialog project={linking} onClose={() => setLinking(null)} />}
     </>
+  )
+}
+
+/** Shows the saved recovery key on request, so another PC can be linked. It's only fetched
+ *  when asked for, and hidden again when Settings closes. */
+function RecoveryKeyReveal() {
+  const [key, setKey] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  async function load(): Promise<string | null> {
+    if (key !== null) return key
+    const k = await api.syncRecoveryKey()
+    setKey(k)
+    return k
+  }
+  async function copy(): Promise<void> {
+    const k = key ?? await api.syncRecoveryKey()
+    if (k === null) return
+    await navigator.clipboard.writeText(k)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  return (
+    <div className="sync-card">
+      <div className="sync-card-title">Recovery key</div>
+      <p className="settings-note">Another PC needs this to link to the sync repo.</p>
+      <code className="sync-key">{key ?? '•••••-•••••-•••••-•••••-•••••'}</code>
+      <div className="sync-actions">
+        <button type="button" className="btn-secondary" onClick={() => { if (key === null) void load(); else setKey(null) }}>{key === null ? 'Reveal' : 'Hide'}</button>
+        <button type="button" className="btn-secondary" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</button>
+      </div>
+    </div>
   )
 }
 

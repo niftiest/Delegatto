@@ -41,6 +41,11 @@ export function normalizeRecoveryKey(key: string): string {
   return key.toUpperCase().replace(/[^A-Z0-9]/g, '')
 }
 
+/** The key as it's shown: five groups of five, however it was typed. */
+export function formatRecoveryKey(key: string): string {
+  return normalizeRecoveryKey(key).replace(/(.{5})(?=.)/g, '$1-')
+}
+
 export type KdfHeader = { name: 'scrypt'; salt: string; N: number; r: number; p: number }
 
 export function newKdf(): KdfHeader {
@@ -93,6 +98,11 @@ export class SyncCodec {
   constructor(private readonly key: Buffer | null) {}
 
   get encrypted(): boolean { return this.key !== null }
+
+  /** Whether this key is the one a repo header's check was made with. */
+  matches(check: string): boolean {
+    return this.key !== null && verifyKeyCheck(this.key, check)
+  }
 
   async pack(plain: Buffer, name: string): Promise<Buffer> {
     const packed = await gzipAsync(plain, { level: 6 })

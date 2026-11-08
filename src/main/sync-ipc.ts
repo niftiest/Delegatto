@@ -63,22 +63,32 @@ export function githubHub(run: Runner): SyncHub {
   }
 }
 
-/** The key, kept so only this Windows account can read it. */
-function protectedKeyStore(file: string): KeyStore {
+/** The key and its recovery key, kept so only this Windows account can read them. Encryption
+ *  guards the copy on GitHub; anyone who can read these files can already read the chats here. */
+function protectedKeyStore(file: string, recoveryFile: string): KeyStore {
+  const read = (path: string): string | null => {
+    try {
+      return safeStorage.decryptString(readFileSync(path))
+    } catch {
+      return null
+    }
+  }
   return {
     load() {
-      try {
-        return Buffer.from(safeStorage.decryptString(readFileSync(file)), 'base64')
-      } catch {
-        return null
-      }
+      const text = read(file)
+      return text === null ? null : Buffer.from(text, 'base64')
     },
-    save(key) {
+    loadRecovery: () => read(recoveryFile),
+    canSave: () => safeStorage.isEncryptionAvailable(),
+    save(key, recoveryKey) {
       if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows can't protect the sync key on this PC.")
       writeFileSync(file, safeStorage.encryptString(key.toString('base64')))
+      if (recoveryKey === null) rmSync(recoveryFile, { force: true })
+      else writeFileSync(recoveryFile, safeStorage.encryptString(recoveryKey))
     },
     clear() {
       rmSync(file, { force: true })
+      rmSync(recoveryFile, { force: true })
     }
   }
 }
@@ -106,7 +116,7 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
     paths,
     run: realRunner,
     hub: githubHub(realRunner),
-    keys: protectedKeyStore(join(dataDir, 'sync-key.bin')),
+    keys: protectedKeyStore(join(dataDir, 'sync-key.bin'), join(dataDir, 'sync-recovery-key.bin')),
     dataDir,
     hostname: process.env.COMPUTERNAME ?? hostname(),
     remoteUrl: repo => `https://github.com/${repo}.git`,
@@ -182,6 +192,8 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
     },
     [SYNC_IPC.removeFromGithub]: (_e, id: string) => service.removeFromGithub(String(id ?? '')),
     [SYNC_IPC.startFresh]: () => service.startFresh(),
+    [SYNC_IPC.recoveryKey]: () => service.recoveryKey(),
+    [SYNC_IPC.replaceRecoveryKey]: () => service.replaceRecoveryKey(),
     [SYNC_IPC.disconnect]: () => service.disconnect()
   }
   for (const [channel, fn] of Object.entries(handlers)) ipcMain.handle(channel, fn as (e: IpcMainInvokeEvent, ...args: unknown[]) => unknown)

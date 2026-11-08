@@ -23,6 +23,8 @@ export const SYNC_IPC = {
   chatOpened: 'sync:chatOpened',
   removeFromGithub: 'sync:removeFromGithub',
   startFresh: 'sync:startFresh',
+  recoveryKey: 'sync:recoveryKey',
+  replaceRecoveryKey: 'sync:replaceRecoveryKey',
   disconnect: 'sync:disconnect'
 } as const
 
@@ -132,6 +134,8 @@ export type SyncStatus = {
   lastError: string | null
   /** The sync repo's size on GitHub, when known. */
   repoSizeBytes: number | null
+  /** This PC saved the recovery key when it made the repo or was linked with it. */
+  hasRecoveryKey: boolean
   projects: SyncProjectRow[]
   remoteProjects: RemoteProject[]
   conflicts: SyncConflict[]
@@ -227,5 +231,9 @@ export type SyncApi = {
   syncChatOpened(sessionPk: number | null): void
   syncRemoveFromGithub(projectId: string): Promise<SyncResult>
   syncStartFresh(): Promise<SyncResult>
+  /** The recovery key, when this PC saved it; null otherwise. */
+  syncRecoveryKey(): Promise<string | null>
+  /** Re-encrypts the repo under a new recovery key, which comes back once to show. */
+  syncReplaceRecoveryKey(): Promise<SetupOutcome>
   syncDisconnect(): Promise<SyncResult>
 }

@@ -297,6 +297,8 @@ const sync: SyncApi = {
   syncChatOpened: pk => ipcRenderer.send(SYNC_IPC.chatOpened, pk),
   syncRemoveFromGithub: id => ipcRenderer.invoke(SYNC_IPC.removeFromGithub, id),
   syncStartFresh: () => ipcRenderer.invoke(SYNC_IPC.startFresh),
+  syncRecoveryKey: () => ipcRenderer.invoke(SYNC_IPC.recoveryKey),
+  syncReplaceRecoveryKey: () => ipcRenderer.invoke(SYNC_IPC.replaceRecoveryKey),
   syncDisconnect: () => ipcRenderer.invoke(SYNC_IPC.disconnect)
 }
 

@@ -33,7 +33,11 @@ function git(cwd: string, ...args: string[]): string {
 
 function memoryKeys(): KeyStore {
   let key: Buffer | null = null
-  return { load: () => key, save: k => { key = k }, clear: () => { key = null } }
+  let recovery: string | null = null
+  return {
+    load: () => key, loadRecovery: () => recovery, canSave: () => true,
+    save: (k, r) => { key = k; recovery = r }, clear: () => { key = null; recovery = null }
+  }
 }
 
 type Pc = {
@@ -297,6 +301,62 @@ describe('setting up', () => {
     const b = makePc('PC-B')
     const linked = await b.service.setupExisting({ name: 'delegatto-sync', recoveryKey: newRecoveryKey() })
     expect(linked).toEqual({ ok: false, error: "That recovery key doesn't match this sync repo." })
+  })
+})
+
+describe('the recovery key', () => {
+  it('can be shown again on the PC that made it and on a PC linked with it', async () => {
+    const { a, b, key } = await pair()
+    expect(a.service.recoveryKey()).toBe(key)
+    expect(b.service.recoveryKey()).toBe(key)
+    expect((await a.service.status()).hasRecoveryKey).toBe(true)
+    await ok(b.service.disconnect())
+    expect(b.service.recoveryKey()).toBeNull()
+  })
+
+  it('keeps the usual form however it was typed when linking', async () => {
+    const a = makePc('PC-A')
+    const made = await a.service.setupNew({ name: 'delegatto-sync', encrypted: true })
+    const b = makePc('PC-B')
+    const sloppy = made.ok ? made.recoveryKey!.toLowerCase().replace(/-/g, ' ') : ''
+    const linked = await b.service.setupExisting({ name: 'delegatto-sync', recoveryKey: sloppy })
+    expect(linked.ok).toBe(true)
+    expect(b.service.recoveryKey()).toBe(made.ok ? made.recoveryKey : null)
+  })
+
+  it('has none for a repo that isn\'t encrypted', async () => {
+    const a = makePc('PC-A')
+    await a.service.setupNew({ name: 'delegatto-sync', encrypted: false })
+    expect(a.service.recoveryKey()).toBeNull()
+  })
+
+  it('can be replaced: chats stay readable, the new key links a PC, and the old key stops working', async () => {
+    const { a, b, rootA, sid, key } = await pair()
+    const made = await a.service.replaceRecoveryKey()
+    expect(made.ok).toBe(true)
+    if (!made.ok) return
+    expect(made.recoveryKey).not.toBe(key)
+    expect(a.service.recoveryKey()).toBe(made.recoveryKey)
+    expect(git(bare, 'rev-list', '--count', 'main').trim()).toBe('1')
+
+    // A keeps syncing under the new key.
+    appendFileSync(chatFile(a, rootA, sid), `${userRow(rootA, sid, 'after the new key')}\n`)
+    await ok(a.service.syncNow())
+
+    // B still has the old key, and is told what to do instead of failing on every file.
+    const stale = await b.service.syncNow()
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.error).toMatch(/new recovery key/)
+
+    // The old key no longer links; the new one does, and brings the chat with what came after.
+    const c = makePc('PC-C')
+    expect((await c.service.setupExisting({ name: 'delegatto-sync', recoveryKey: key })).ok).toBe(false)
+    expect((await c.service.setupExisting({ name: 'delegatto-sync', recoveryKey: made.recoveryKey! })).ok).toBe(true)
+    const projectId = (await c.service.status()).remoteProjects[0]!.projectId
+    const rootC = join(base, 'third', 'App')
+    const linked = await c.service.linkProject(projectId, rootC)
+    expect(linked.ok).toBe(true)
+    expect(textsOf(chatFile(c, rootC, sid))).toContain('after the new key')
   })
 })
 

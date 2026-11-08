@@ -11,7 +11,7 @@ import { dirSize } from '../manage/fs-util'
 import type { ProjectInfo } from '../manage/types'
 import { defaultCloneRoot, prepareRepo, readOriginRepo, type Runner } from '../engine/github'
 import {
-  deriveKey, keyCheck, newKdf, newRecoveryKey, SyncCodec, verifyKeyCheck, type KdfHeader
+  deriveKey, formatRecoveryKey, keyCheck, newKdf, newRecoveryKey, SyncCodec, verifyKeyCheck, type KdfHeader
 } from './crypto'
 import { codeState, SyncGit } from './git'
 import { countImages, mergeFinding, redactSecrets, scanText } from './secret-scan'
@@ -59,7 +59,14 @@ export type SyncHub = {
   privateReposWithFile(file: string): Promise<Array<{ repo: string; text: string }>>
 }
 
-export type KeyStore = { load(): Buffer | null; save(key: Buffer): void; clear(): void }
+/** The repo key, and the recovery key it came from when this PC was given or made one. */
+export type KeyStore = {
+  load(): Buffer | null
+  loadRecovery(): string | null
+  canSave(): boolean
+  save(key: Buffer, recoveryKey: string | null): void
+  clear(): void
+}
 
 export type SyncDeps = {
   paths: ClaudePaths
@@ -204,6 +211,17 @@ async function walkFiles(dir: string, rel: string, out: Map<string, LocalFile>):
       if (st !== null) out.set(childRel, { path, size: st.size, mtimeMs: st.mtimeMs })
     }
   }
+}
+
+/** Every file in the sync repo's checkout, by its path in the repo. */
+async function repoFiles(repoDir: string): Promise<string[]> {
+  const out = new Map<string, LocalFile>()
+  for (const e of await fsp.readdir(repoDir, { withFileTypes: true })) {
+    if (e.name === '.git') continue
+    if (e.isDirectory()) await walkFiles(join(repoDir, e.name), e.name, out)
+    else if (e.isFile()) out.set(e.name, { path: join(repoDir, e.name), size: 0, mtimeMs: 0 })
+  }
+  return [...out.keys()].sort()
 }
 
 function replaceSessionId(line: string, from: string, to: string): string {
@@ -402,7 +420,7 @@ export class SyncService {
         await this.freshClone(repo)
         atomicWriteText(join(this.repoDir, HEADER_FILE), JSON.stringify(header, null, 2))
         await this.git!.commitAndPush('Set up Delegatto sync')
-        this.activate(repo, options.encrypted, key)
+        this.activate(repo, options.encrypted, key, recoveryKey)
         return { ok: true, repo, recoveryKey, encrypted: options.encrypted }
       } catch (e) {
         return { ok: false, error: errorText(e) }
@@ -431,7 +449,7 @@ export class SyncService {
           if (!verifyKeyCheck(key, header.check)) return { ok: false, error: "That recovery key doesn't match this sync repo." }
         }
         await this.freshClone(repo)
-        this.activate(repo, header.encrypted, key)
+        this.activate(repo, header.encrypted, key, header.encrypted ? formatRecoveryKey(options.recoveryKey) : null)
         this.readCatalog()
         await this.refreshPresence(true)
         return { ok: true, repo, recoveryKey: null, encrypted: header.encrypted }
@@ -453,8 +471,8 @@ export class SyncService {
     await fsp.rm(this.repoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
   }
 
-  private activate(repo: string, encrypted: boolean, key: Buffer | null): void {
-    if (key !== null) this.deps.keys.save(key)
+  private activate(repo: string, encrypted: boolean, key: Buffer | null, recoveryKey: string | null): void {
+    if (key !== null) this.deps.keys.save(key, recoveryKey)
     this.state.repo = repo
     this.state.leftSync = false
     this.state.encrypted = encrypted
@@ -746,6 +764,63 @@ export class SyncService {
     })
   }
 
+  /** The recovery key, when this PC made the repo or was linked with it. */
+  recoveryKey(): string | null {
+    return this.state.repo !== null && this.state.encrypted ? this.deps.keys.loadRecovery() : null
+  }
+
+  /** Encrypts the whole repo again under a new recovery key, for when nobody has the old one.
+   *  Old history goes too, since it was encrypted with the old key. Other PCs link again. */
+  replaceRecoveryKey(): Promise<SetupOutcome> {
+    return this.enqueue('Making a new recovery key', async () => {
+      try {
+        this.requireRepo()
+        if (!this.state.encrypted) return { ok: false, error: "This sync repo isn't encrypted, so it has no recovery key." }
+        if (!this.deps.keys.canSave()) return { ok: false, error: "Windows can't protect the sync key on this PC." }
+        const git = this.git!
+        await git.pull()
+        const header = this.parseHeader(await fsp.readFile(join(this.repoDir, HEADER_FILE), 'utf8').catch(() => ''))
+        if (header === null || header.check === null || !this.codec!.matches(header.check)) {
+          throw new Error("This PC's key doesn't match the sync repo any more, so it can't re-encrypt it.")
+        }
+        await git.disableSparse()
+        const recoveryKey = newRecoveryKey()
+        const kdf = newKdf()
+        const key = await deriveKey(recoveryKey, kdf)
+        const next = new SyncCodec(key)
+        for (const name of await repoFiles(this.repoDir)) {
+          if (name === HEADER_FILE) continue
+          const plain = await this.codec!.unpack(await fsp.readFile(this.repoPath(name)), name)
+          await this.writeRepoFile(name, await next.pack(plain, name))
+        }
+        atomicWriteText(join(this.repoDir, HEADER_FILE), JSON.stringify({ ...header, kdf, check: keyCheck(key) }, null, 2))
+        await git.startFresh('New recovery key')
+        this.deps.keys.save(key, recoveryKey)
+        this.codec = next
+        this.state.remoteSha = await git.currentHead()
+        this.save()
+        await this.applySparse()
+        await this.publishPresence(true)
+        await this.refreshPresence(true)
+        this.lastError = null
+        return { ok: true, repo: this.state.repo!, recoveryKey, encrypted: true }
+      } catch (e) {
+        return { ok: false, error: errorText(e) }
+      }
+    })
+  }
+
+  /** Stops before reading anything if another PC has put the repo under a new key. */
+  private checkRepoKey(): void {
+    if (!this.state.encrypted) return
+    let text: string
+    try { text = readFileSync(join(this.repoDir, HEADER_FILE), 'utf8') } catch { return }
+    const header = this.parseHeader(text)
+    if (header?.check != null && !this.codec!.matches(header.check)) {
+      throw new Error('This sync repo has a new recovery key, made on another PC. Disconnect this PC, then link it again with the new key.')
+    }
+  }
+
   private requireRepo(): void {
     if (this.state.repo === null || this.git === null || this.codec === null) throw new Error('Sync isn’t set up on this PC.')
   }
@@ -901,6 +976,7 @@ export class SyncService {
       const watch = this.enableProgress
       watch?.report({ workingDir: watch.root, phase: 'download', done: 0, total: 0 })
       const main = await git.pull()
+      this.checkRepoKey()
       await this.loadCatalog()
       const pending: Array<() => void> = []
       let localChanges = false
@@ -1549,6 +1625,7 @@ export class SyncService {
       lastCheckAt: this.lastCheckAt,
       lastError: this.lastError,
       repoSizeBytes: this.repoSize,
+      hasRecoveryKey: this.recoveryKey() !== null,
       projects: rows,
       remoteProjects,
       discoveredRepos: this.discovered,
