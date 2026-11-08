@@ -398,13 +398,23 @@ function samePath(a: string, b: string): boolean {
 
 function progressLabel(p: EnableProgress | null): string {
   if (p === null) return 'Starting to sync…'
+  if (p.phase === 'clone') return 'Getting the project’s code…'
   if (p.phase === 'download') return 'Getting the latest from GitHub…'
   if (p.phase === 'pack') return `Packing chats: ${p.done} of ${p.total}`
   return `Uploading to GitHub: ${p.done}%`
 }
 
+/** Setting up a synced project on this PC, step by step. */
+export function setupLabel(p: EnableProgress | null, repo: string | null): string {
+  if (p === null || (p.phase === 'download' && p.total === 0 && repo === null)) return 'Getting its synced chats…'
+  if (p.phase === 'clone') return repo !== null ? `Cloning ${repo}…` : 'Getting the project’s code…'
+  if (p.phase === 'download') return 'Downloading its synced chats…'
+  if (p.phase === 'pack') return p.total === 0 ? 'Adding its chats…' : `Adding chats: ${p.done} of ${p.total}`
+  return 'Finishing up…'
+}
+
 /** A fraction from 0 to 1, or null when there's no way to tell how far along it is. */
-function ProgressBar({ fraction }: { fraction: number | null }) {
+export function ProgressBar({ fraction }: { fraction: number | null }) {
   return (
     <div className={`sync-progress${fraction === null ? ' busy' : ''}`} role="progressbar"
       aria-valuemin={0} aria-valuemax={100} aria-valuenow={fraction === null ? undefined : Math.round(fraction * 100)}>

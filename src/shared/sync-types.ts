@@ -64,8 +64,9 @@ export type ScanProgress = { workingDir: string; done: number; total: number }
  *  `write` counts the messages added so far. */
 export type SyncIncoming = { sessionId: string; from: string; phase: 'download' | 'write'; done: number; total: number }
 
-/** A project's first sync. `pack` counts chats; `upload` counts percent; `download` has no total. */
-export type EnableProgress = { workingDir: string; phase: 'download' | 'pack' | 'upload'; done: number; total: number }
+/** A project's first sync, or setting one up from another PC. `pack` counts chats; `upload`
+ *  counts percent; `clone` (the project's own repo) and `download` have no total. */
+export type EnableProgress = { workingDir: string; phase: 'clone' | 'download' | 'pack' | 'upload'; done: number; total: number }
 
 /** What to do with each finding when a project is opted in. */
 export type FindingDecisions = {
@@ -237,6 +238,7 @@ export type SyncApi = {
   syncIncoming(): Promise<SyncIncoming[]>
   onSyncIncoming(cb: (list: SyncIncoming[]) => void): () => void
   syncDisableProject(projectId: string): Promise<SyncResult>
+  /** Progress arrives through onSyncEnableProgress, for the folder. */
   syncLinkProject(projectId: string, folder: string): Promise<LinkOutcome>
   syncNow(): Promise<SyncResult>
   syncDecideFindings(projectId: string, decisions: FindingDecisions): Promise<SyncResult>

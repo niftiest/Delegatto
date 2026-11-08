@@ -6,7 +6,8 @@ import { modelOption, useClaudeModels } from './useClaudeModels'
 import type { FolderTrust } from '../../shared/shell-run-types'
 import type { GithubRepoOption, GithubStatus } from '../../shared/github-types'
 import type { RemoteProject, SyncStatus } from '../../shared/sync-types'
-import { SyncKeyEntry } from './SyncSettings'
+import { ProgressBar, SyncKeyEntry, setupLabel } from './SyncSettings'
+import type { EnableProgress } from '../../shared/sync-types'
 
 /** Modal for starting a brand-new chat (Plan 2 Task 8): a working directory
  *  (typed, or via the native folder picker), whether to run with
@@ -93,6 +94,8 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
   // A project brought over from another PC, with what to know before opening it.
   const [linked, setLinked] = useState<{ workingDir: string; warnings: string[] } | null>(null)
   const [preparing, setPreparing] = useState(false)
+  // Setting up a synced project here: cloning it, then bringing in its chats.
+  const [setup, setSetup] = useState<EnableProgress | null>(null)
   // The repo + folder already cloned or pulled, so a second Create (after a prompt) doesn't repeat it.
   const [prepared, setPrepared] = useState<string | null>(null)
   const [repoWarning, setRepoWarning] = useState<string | null>(null)
@@ -176,6 +179,13 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
   }
 
   async function bringOver(projectId: string, folder: string) {
+    setSetup(null)
+    const norm = (p: string): string => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+    const off = api.onSyncEnableProgress(p => { if (norm(p.workingDir) === norm(folder)) setSetup(p) })
+    try { await bringOverNow(projectId, folder) } finally { off(); setSetup(null) }
+  }
+
+  async function bringOverNow(projectId: string, folder: string) {
     if (linked !== null) { onOpenProject(linked.workingDir); return }
     setError(null)
     setPreparing(true)
@@ -324,6 +334,12 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
         </label>
 
         {error !== null && <div className="modal-error">{error}</div>}
+        {preparing && picked?.sync != null && (
+          <div className="field" role="status">
+            <p className="field-note">{setupLabel(setup, picked.repo)}</p>
+            <ProgressBar fraction={setup !== null && setup.phase === 'pack' && setup.total > 0 ? setup.done / setup.total : null} />
+          </div>
+        )}
         {linked?.warnings.map(w => <div key={w} className="sync-warn-text" role="alert">{w}</div>)}
         {repoWarning !== null && <div className="modal-error" role="alert">{repoWarning} Press Create again to start the chat anyway.</div>}
         {trustPrompt !== null && <TrustPrompt trust={trustPrompt} skipPermissions={skipPermissions} />}

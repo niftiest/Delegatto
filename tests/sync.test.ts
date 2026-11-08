@@ -539,6 +539,30 @@ describe('syncing between two PCs', () => {
     expect(got).toEqual([40, 100])
   })
 
+  it('reports each step of setting a project up on another PC, counting its chats in', async () => {
+    const a = makePc('PC-A')
+    const made = await a.service.setupNew({ name: 'delegatto-sync', encrypted: true })
+    const rootA = a.tree.workDir('Shop')
+    for (let i = 0; i < 2; i++) {
+      const sid = randomUUID()
+      a.tree.addSessionRaw(rootA, sid, userRow(rootA, sid, `chat ${i}`), assistantRow(rootA, sid, 'done'))
+    }
+    await ok(a.service.enableProject(rootA, NO_DECISIONS))
+    const b = makePc('PC-B')
+    await b.service.setupExisting({ name: 'delegatto-sync', recoveryKey: made.ok ? made.recoveryKey! : '' })
+    const projectId = (await b.service.status()).remoteProjects[0]!.projectId
+    const rootB = join(base, 'elsewhere', 'Shop')
+    const seen: EnableProgress[] = []
+    const linked = await b.service.linkProject(projectId, rootB, p => seen.push(p))
+    expect(linked.ok).toBe(true)
+    expect(seen[0]!.phase).toBe('download')
+    const packs = seen.filter(p => p.phase === 'pack')
+    expect(packs.map(p => p.done)).toEqual([0, 1, 2])
+    expect(packs.every(p => p.total === 2)).toBe(true)
+    expect(seen.findIndex(p => p.phase === 'pack')).toBeGreaterThan(seen.findIndex(p => p.phase === 'download'))
+    expect(seen.every(p => p.workingDir.toLowerCase() === rootB.toLowerCase())).toBe(true)
+  })
+
   it('says which chat is getting messages from which PC, counts them in, then lets go', async () => {
     const { a, b, rootA, sid } = await pair()
     for (let i = 0; i < 3; i++) appendFileSync(chatFile(a, rootA, sid), `${userRow(rootA, sid, `more ${i}`)}\n`)

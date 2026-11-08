@@ -180,7 +180,10 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
       return service.enableProject(String(dir ?? ''), decisionsOf(d), p => { if (!sender.isDestroyed()) sender.send(SYNC_IPC.enableProgress, p) })
     },
     [SYNC_IPC.disableProject]: (_e, id: string) => service.disableProject(String(id ?? '')),
-    [SYNC_IPC.linkProject]: (_e, id: string, folder: string) => service.linkProject(String(id ?? ''), String(folder ?? '')),
+    [SYNC_IPC.linkProject]: (e, id: string, folder: string) => {
+      const sender = e.sender
+      return service.linkProject(String(id ?? ''), String(folder ?? ''), p => { if (!sender.isDestroyed()) sender.send(SYNC_IPC.enableProgress, p) })
+    },
     [SYNC_IPC.syncNow]: () => service.syncNow(),
     [SYNC_IPC.decideFindings]: (_e, id: string, d: FindingDecisions) => service.decideFindings(String(id ?? ''), decisionsOf(d)),
     [SYNC_IPC.resolveConflict]: (_e, id: string) => service.resolveConflict(String(id ?? '')),

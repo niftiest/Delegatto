@@ -913,9 +913,10 @@ export class SyncService {
 
   /** Puts a project from the sync repo on this PC: makes the folder, clones the project's own
    *  repo there if it has one, then brings in the chats with their paths pointing at it. */
-  linkProject(projectId: string, folder: string): Promise<LinkOutcome> {
+  linkProject(projectId: string, folder: string, progress?: (p: EnableProgress) => void): Promise<LinkOutcome> {
     return this.enqueue('Setting up the project here', async () => {
       try {
+        if (progress !== undefined) progress({ workingDir: normalizePath(folder.trim()), phase: 'download', done: 0, total: 0 })
         this.requireRepo()
         await this.git!.pull()
         await this.loadCatalog()
@@ -929,8 +930,10 @@ export class SyncService {
         const taken = Object.values(this.state.projects).find(p => isSamePath(p.root, root))
         if (taken !== undefined) return { ok: false, error: `${root} is already synced as another project.` }
 
+        this.enableProgress = progress === undefined ? null : { root, report: progress }
         const warnings: string[] = []
         if (meta.github !== null) {
+          this.enableProgress?.report({ workingDir: root, phase: 'clone', done: 0, total: 0 })
           const prepared = await prepareRepo(this.deps.run, { repo: meta.github, cwd: root })
           if (!prepared.ok) return { ok: false, error: prepared.error }
           if (prepared.warning !== undefined) warnings.push(prepared.warning)
@@ -954,12 +957,16 @@ export class SyncService {
           projectId, root, excludedChats: [], redact: [], allow: [], pendingFindings: [], lastSyncAt: null, warnings: [], files: {}
         }
         this.save()
+        // Fetching the project's part of the sync repo is the slow part: it's all its chats.
+        this.enableProgress?.report({ workingDir: root, phase: 'download', done: 0, total: 0 })
         await this.applySparse()
         await this.cycle()
         await this.refreshCatalogue()
         return { ok: true, workingDir: root, chats: this.listLocalChats(root).length, warnings }
       } catch (e) {
         return { ok: false, error: errorText(e) }
+      } finally {
+        this.enableProgress = null
       }
     })
   }
