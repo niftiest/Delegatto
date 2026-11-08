@@ -85,6 +85,10 @@ describe('the list in New Chat', () => {
     const rows = checkoutRows([repo('me/app', { onThisPc: true, destination: 'E:\\mine\\app' })], [remote({})], [])
     expect(rows[0]).toMatchObject({ onThisPc: true, folder: 'E:\\mine\\app' })
   })
+  it('marks repos this PC already syncs', () => {
+    const rows = checkoutRows([repo('me/a'), repo('me/b')], [], [], ['ME/B'])
+    expect(rows.map(r => [r.label, r.syncedHere])).toEqual([['me/a', false], ['me/b', true]])
+  })
   it('leaves out the sync repo itself', () => {
     expect(checkoutRows([repo('me/delegatto-sync'), repo('me/a')], [], ['ME/delegatto-sync']).map(r => r.label)).toEqual(['me/a'])
   })

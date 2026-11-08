@@ -1692,11 +1692,15 @@ export type CheckoutRow = {
   repo: string | null
   /** Set when another PC syncs this project: picking it brings the chats over too. */
   sync: { projectId: string; from: string; chats: number } | null
+  /** This PC already syncs it. */
+  syncedHere: boolean
 }
 
 /** Projects syncing from other PCs come first, including any with no GitHub repo, then the rest
- *  in the order given. The sync repos themselves aren't projects, so they're left out. */
-export function checkoutRows(repos: GithubRepoOption[], remote: RemoteProject[], syncRepos: string[]): CheckoutRow[] {
+ *  in the order given. The sync repos themselves aren't projects, so they're left out.
+ *  `syncedHere` lists the GitHub repos of projects this PC syncs. */
+export function checkoutRows(repos: GithubRepoOption[], remote: RemoteProject[], syncRepos: string[], syncedHere: string[] = []): CheckoutRow[] {
+  const here = new Set(syncedHere.map(r => r.toLowerCase()))
   const hidden = new Set(syncRepos.map(r => r.toLowerCase()))
   const byRepo = new Map(repos.map(r => [r.fullName.toLowerCase(), r]))
   const synced = new Set<string>()
@@ -1707,12 +1711,12 @@ export function checkoutRows(repos: GithubRepoOption[], remote: RemoteProject[],
       key: `sync:${p.projectId}`, label: p.github ?? p.name, description: known?.description ?? null,
       isPrivate: known?.isPrivate ?? false, isArchived: known?.isArchived ?? false, onThisPc: known?.onThisPc ?? false,
       folder: known?.onThisPc === true ? known.destination : p.suggestedFolder, repo: p.github,
-      sync: { projectId: p.projectId, from: p.updatedBy, chats: p.chats }
+      sync: { projectId: p.projectId, from: p.updatedBy, chats: p.chats }, syncedHere: false
     }
   })
   const rest = repos.filter(r => !hidden.has(r.fullName.toLowerCase()) && !synced.has(r.fullName.toLowerCase())).map((r): CheckoutRow => ({
     key: `repo:${r.fullName}`, label: r.fullName, description: r.description, isPrivate: r.isPrivate, isArchived: r.isArchived,
-    onThisPc: r.onThisPc, folder: r.destination, repo: r.fullName, sync: null
+    onThisPc: r.onThisPc, folder: r.destination, repo: r.fullName, sync: null, syncedHere: here.has(r.fullName.toLowerCase())
   }))
   return [...first, ...rest]
 }

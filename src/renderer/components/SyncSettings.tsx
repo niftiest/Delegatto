@@ -348,7 +348,33 @@ type Choice = 'redact' | 'allow' | 'exclude'
 /** Starts syncing a project from outside Settings: checks it for likely secrets, then shows the
  *  same review, which a project with nothing in it yet doesn't need. Closing this while the
  *  first upload runs doesn't stop it, and Settings shows any error from then on. */
-export function StartProjectSync({ workingDir, name, encrypted, onClose }: {
+export function StartProjectSync({ workingDir, name, encrypted, ask = false, onClose }: {
+  workingDir: string
+  name: string
+  encrypted: boolean
+  /** Ask whether to sync it at all before checking anything, as after cloning a repo. */
+  ask?: boolean
+  onClose: () => void
+}) {
+  const [asking, setAsking] = useState(ask)
+  if (asking) {
+    return (
+      <div className="modal-overlay" onClick={e => e.stopPropagation()}>
+        <div className="modal sync-dialog" role="dialog" aria-label={`Sync ${name}?`}>
+          <h2 className="modal-title">Sync {name} across your PCs?</h2>
+          <p className="settings-note">Its chats, starting with this one, will be on your other PCs too, and stay up to date as you work. You can change this later in Settings &gt; Project sync.</p>
+          <div className="modal-actions">
+            <button type="button" className="btn-secondary" onClick={onClose}>Not now</button>
+            <button type="button" className="btn-primary" onClick={() => setAsking(false)}>Sync it</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+  return <StartProjectSyncSteps workingDir={workingDir} name={name} encrypted={encrypted} onClose={onClose} />
+}
+
+function StartProjectSyncSteps({ workingDir, name, encrypted, onClose }: {
   workingDir: string
   name: string
   encrypted: boolean

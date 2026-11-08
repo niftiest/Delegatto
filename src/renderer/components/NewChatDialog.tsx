@@ -23,6 +23,9 @@ import { projectSyncState, type RemoteProject, type SyncStatus } from '../../sha
  *  report for the manual check. */
 const SEARCH_ABOVE = 10
 
+/** After the chat is made: start syncing its project, ask first, or leave it. */
+export type SyncChoice = 'yes' | 'ask' | 'no'
+
 export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, confirmBypass = false }: {
   defaults: NewChatDefaults
   /** Ask once more before creating a chat that skips permission prompts. */
@@ -33,7 +36,7 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
    *  `{ok:false, error}` (e.g. a cwd that doesn't exist on disk), which this
    *  component shows inline and leaves the dialog open so the user can
    *  correct it. */
-  onCreate: (options: NewProjectOptions, sync: boolean) => Promise<{ ok: true } | { ok: false; error: string }>
+  onCreate: (options: NewProjectOptions, sync: SyncChoice) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Opens a project that's just been brought over from another PC, and closes this dialog. */
   onOpenProject: (workingDir: string) => void
 }) {
@@ -114,11 +117,16 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
     return () => { alive = false }
   }, [])
 
-  const rows = repos === null && remote.length === 0 ? null : checkoutRows(repos ?? [], remote, syncRepos)
+  const syncedHere = (syncStatus?.projects ?? []).flatMap(p => p.projectId !== null && p.github !== null ? [p.github] : [])
+  const rows = repos === null && remote.length === 0 ? null : checkoutRows(repos ?? [], remote, syncRepos, syncedHere)
   const shownRows = rows === null ? [] : filterCheckoutRows(rows, search)
   const folder = cwd.trim()
-  const alreadySyncing = syncStatus !== null && folder.length > 0 && projectSyncState(syncStatus, { cwd: folder })?.kind === 'on'
+  const alreadySyncing = picked?.syncedHere === true ||
+    (syncStatus !== null && folder.length > 0 && projectSyncState(syncStatus, { cwd: folder })?.kind === 'on')
   const canSync = syncStatus?.configured === true && picked?.sync == null && !alreadySyncing
+  // A repo picked from the list is asked about once it's cloned and the chat exists, when its
+  // folder is settled; a typed folder keeps the checkbox.
+  const askAfter = canSync && picked !== null && picked.repo !== null && picked.folder === folder
 
   /** Clicking the picked row again goes back to using a folder. A clone already on this PC is
    *  used as it is: only a repo that isn't here yet gets fetched. */
@@ -184,7 +192,7 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
     setCreating(true)
     setError(null)
     try {
-      const result = await onCreate(resolved.options, canSync && syncIt)
+      const result = await onCreate(resolved.options, askAfter ? 'ask' : canSync && syncIt ? 'yes' : 'no')
       if (!result.ok) setError(result.error)
     } finally {
       setCreating(false)
@@ -214,11 +222,13 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
                     disabled={preparing} title={r.description ?? undefined} onClick={() => pickRow(r)}>
                     <span className="checkout-name">
                       {r.sync !== null && <span className="checkout-synced" title={`Syncing from ${r.sync.from}`} aria-label="Syncing from another PC">⟳</span>}
+                      {r.syncedHere && <span className="checkout-synced" title="Syncing from this PC" aria-label="Syncing from this PC">⟳</span>}
                       {r.label}
                     </span>
                     <span className="checkout-meta">
                       {[
                         r.sync !== null && `Syncing from ${r.sync.from}, ${r.sync.chats} chat${r.sync.chats === 1 ? '' : 's'}`,
+                        r.syncedHere && 'Syncing from this PC',
                         r.onThisPc && 'On this PC',
                         r.isPrivate && 'Private',
                         r.isArchived && 'Archived'
@@ -256,7 +266,8 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
             : 'You’ll be asked to Allow or Deny each tool use that needs permission.'}
         </p>
 
-        {canSync && (
+        {askAfter && <p className="field-note">Once it’s set up here, you’ll be asked whether to sync it across your PCs.</p>}
+        {canSync && !askAfter && (
           <label className="field field-checkbox">
             <input type="checkbox" checked={syncIt} onChange={e => setSyncIt(e.target.checked)} />
             <span>Sync this project across your PCs</span>
