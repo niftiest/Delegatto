@@ -7,6 +7,7 @@ export const UPDATE_IPC = {
   check: 'update:check',
   install: 'update:install',
   download: 'update:download',
+  updateAndRestart: 'update:updateAndRestart',
   setHold: 'update:setHold',
   work: 'update:work',
   restartWhenFinished: 'update:restartWhenFinished',
@@ -36,7 +37,13 @@ export type UpdateStatus = UpdateState & {
   justUpdated: boolean
   /** Restarting once this is done, because the user asked for that. */
   restartWaiting: RestartWork | null
+  /** The download was started by "Update and restart", so it restarts by itself when done. */
+  restartAfterDownload: boolean
 }
+
+/** "Update and restart": `now` restarts the moment it's ready, even mid-turn (the user saw
+ *  what that interrupts and chose it); `whenFinished` waits until nothing would be interrupted. */
+export type UpdateRestartMode = 'now' | 'whenFinished'
 
 /** What a restart would interrupt right now. */
 export type RestartWork = {
@@ -86,6 +93,8 @@ export type UpdateApi = {
   installUpdate(): Promise<void>
   /** Download the version a check found. Nothing is downloaded until this is called. */
   downloadUpdate(): Promise<void>
+  /** One click: download what a check found if it isn't yet, install it, and restart. */
+  updateAndRestart(mode: UpdateRestartMode): Promise<void>
   /** What restarting now would interrupt. */
   updateRestartWork(): Promise<RestartWork>
   /** Restart once nothing is running and nothing is unsent. */

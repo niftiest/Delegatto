@@ -229,6 +229,7 @@ const update: UpdateApi = {
   checkForUpdates: () => ipcRenderer.invoke(UPDATE_IPC.check),
   installUpdate: () => ipcRenderer.invoke(UPDATE_IPC.install),
   downloadUpdate: () => ipcRenderer.invoke(UPDATE_IPC.download),
+  updateAndRestart: mode => ipcRenderer.invoke(UPDATE_IPC.updateAndRestart, mode),
   setUpdateHold: hold => ipcRenderer.invoke(UPDATE_IPC.setHold, hold),
   setUpdateOpenChat: chat => ipcRenderer.invoke(UPDATE_IPC.setOpenChat, chat),
   takeResumedChat: () => ipcRenderer.invoke(UPDATE_IPC.takeResumedChat),

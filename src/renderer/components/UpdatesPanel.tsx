@@ -11,8 +11,10 @@ export function describeUpdate(s: UpdateStatus, autoInstall = false): string {
     case 'none': return 'You have the latest version.'
     case 'available': return s.reason !== undefined
       ? `Version ${s.version} is available, but it can't be downloaded from here: ${s.reason}`
-      : `Version ${s.version} is available. Nothing is downloaded until you choose to.`
-    case 'downloading': return `Downloading version ${s.version}… ${s.percent}%`
+      : `Version ${s.version} is available.`
+    case 'downloading': return s.restartAfterDownload
+      ? `Downloading version ${s.version}… ${s.percent}%. Delegatto restarts into it when it’s done.`
+      : `Downloading version ${s.version}… ${s.percent}%`
     case 'ready': return autoInstall
       ? `Version ${s.version} is ready. It installs the next time Delegatto is idle, or restart now.`
       : `Version ${s.version} is ready. Restart Delegatto to install it.`
@@ -21,7 +23,8 @@ export function describeUpdate(s: UpdateStatus, autoInstall = false): string {
   }
 }
 
-/** "Restart to update": straight away if that interrupts nothing, otherwise it asks. */
+/** "Update and restart": downloads if needed, installs and restarts, straight away if that
+ *  interrupts nothing, otherwise it asks first. */
 function useRestartRequest(): { request: () => void; dialog: ReactNode } {
   const [work, setWork] = useState<RestartWork | null>(null)
   const open = work !== null
@@ -32,7 +35,7 @@ function useRestartRequest(): { request: () => void; dialog: ReactNode } {
   }, [open])
   const request = (): void => {
     void api.updateRestartWork().then(w => {
-      if (nothingToInterrupt(w)) void api.installUpdate()
+      if (nothingToInterrupt(w)) void api.updateAndRestart('whenFinished')
       else setWork(w)
     })
   }
@@ -56,10 +59,10 @@ function RestartDialog({ work, onClose }: { work: RestartWork; onClose: () => vo
         <div className="modal-actions">
           <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
           {clear
-            ? <button type="button" className="btn-primary" onClick={() => { onClose(); void api.installUpdate() }}>Restart now</button>
+            ? <button type="button" className="btn-primary" onClick={() => { onClose(); void api.updateAndRestart('whenFinished') }}>Update and restart</button>
             : <>
-                <button type="button" className="btn-secondary" onClick={() => { onClose(); void api.installUpdate() }}>Restart now</button>
-                <button type="button" className="btn-primary" autoFocus onClick={() => { onClose(); void api.restartWhenFinished() }}>Restart when finished</button>
+                <button type="button" className="btn-secondary" onClick={() => { onClose(); void api.updateAndRestart('now') }}>Restart now</button>
+                <button type="button" className="btn-primary" autoFocus onClick={() => { onClose(); void api.updateAndRestart('whenFinished') }}>Restart when finished</button>
               </>}
         </div>
       </div>
@@ -89,7 +92,7 @@ export function UpdatesPanel({ autoInstall }: { autoInstall: boolean }) {
       <div className="settings-row">
         <div className="settings-row-label">Delegatto {status.currentVersion}
           <span className="settings-hint">
-            {status.channel === 'portable' ? 'Portable version: a new version downloads beside this file, starts, and removes the old one.' : status.channel === 'dev' ? 'Development build.' : 'Installed version: a new version downloads only when you click Download, then installs.'}
+            {status.channel === 'portable' ? 'Portable version: a new version downloads beside this file, starts, and removes the old one.' : status.channel === 'dev' ? 'Development build.' : 'Installed version: a new version downloads only when you click Update and restart.'}
           </span>
         </div>
       </div>
@@ -103,6 +106,9 @@ export function UpdatesPanel({ autoInstall }: { autoInstall: boolean }) {
         {status.state === 'ready' && status.restartWaiting === null && (
           <button type="button" className="btn-primary" onClick={restart.request}>Restart to update</button>
         )}
+        {status.state === 'downloading' && status.restartAfterDownload && (
+          <button type="button" className="btn-secondary" onClick={() => void api.cancelUpdateRestart()}>Don’t restart</button>
+        )}
         {status.state === 'ready' && status.restartWaiting !== null && (
           <>
             <button type="button" className="btn-secondary" onClick={() => void api.cancelUpdateRestart()}>Don’t restart</button>
@@ -111,7 +117,7 @@ export function UpdatesPanel({ autoInstall }: { autoInstall: boolean }) {
         )}
         {status.state === 'available' && (status.reason !== undefined
           ? <button type="button" className="btn-primary" onClick={() => void api.openUpdateDownload()}>Open the download page</button>
-          : <button type="button" className="btn-primary" onClick={() => void api.downloadUpdate()}>Download version {status.version}</button>)}
+          : <button type="button" className="btn-primary" onClick={restart.request}>Update and restart</button>)}
       </div>
       {restart.dialog}
     </div>
@@ -124,18 +130,17 @@ export function UpdateIcon() {
   const restart = useRestartRequest()
   if (status === null) return null
   // Waiting to restart has its own bar, with a way to change your mind.
-  if (status.restartWaiting !== null) return null
+  if (status.restartWaiting !== null || status.restartAfterDownload) return null
   const downloading = status.state === 'downloading'
   const canAct = status.state === 'ready' || status.state === 'available'
   if (!downloading && !canAct) return null
   return (
     <>
       <button type="button" className={`update-icon${downloading ? ' update-icon-busy' : ''}`} disabled={downloading}
-        title={downloading ? `A new version is downloading (${status.percent}%)` : status.state === 'ready' ? 'A new version is ready, click to restart into it' : 'A new version is available, click to download it'}
-        aria-label={downloading ? 'A new version is downloading' : status.state === 'ready' ? 'A new version is ready, click to restart into it' : 'A new version is available, click to download it'}
+        title={downloading ? `A new version is downloading (${status.percent}%)` : status.state === 'ready' ? 'A new version is ready, click to restart into it' : 'A new version is available, click to update and restart'}
+        aria-label={downloading ? 'A new version is downloading' : status.state === 'ready' ? 'A new version is ready, click to restart into it' : 'A new version is available, click to update and restart'}
         onClick={() => {
-          if (status.state === 'ready') restart.request()
-          else if (status.state === 'available' && status.reason === undefined) void api.downloadUpdate()
+          if (status.state === 'ready' || (status.state === 'available' && status.reason === undefined)) restart.request()
           else void api.openUpdateDownload()
         }}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.5 6.8 8 10.3l3.5-3.5M3 13.5h10" /></svg>
@@ -151,6 +156,14 @@ export function UpdateBar() {
   const status = useUpdateStatus()
   const [dismissed, setDismissed] = useState<string | null>(null)
   if (status === null) return null
+  if (status.state === 'downloading' && status.restartAfterDownload) {
+    return (
+      <div className="update-bar" role="status">
+        <span>Updating to Delegatto {status.version}: downloading, {status.percent}%. It restarts by itself when it’s done.</span>
+        <button type="button" className="update-bar-btn" onClick={() => void api.cancelUpdateRestart()}>Don’t restart</button>
+      </div>
+    )
+  }
   if (status.state === 'ready' && status.restartWaiting !== null) {
     return (
       <div className="update-bar" role="status">

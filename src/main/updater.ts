@@ -1,7 +1,7 @@
 import { app, ipcMain, net, powerMonitor, shell, type BrowserWindow } from 'electron'
 import { spawn } from 'node:child_process'
 import { autoUpdater } from 'electron-updater'
-import { canRestartForUpdate, settleForRestart, UPDATE_IPC, type RestartWork, type UpdateState, type UpdateStatus } from '../shared/update-types'
+import { canRestartForUpdate, nothingToInterrupt, settleForRestart, UPDATE_IPC, type RestartWork, type UpdateRestartMode, type UpdateState, type UpdateStatus } from '../shared/update-types'
 import { compareVersions } from '../shared/semver'
 import type { ResumeChat } from './update-resume'
 import { downloadPortable, handoffArgs, pickPortableAsset, previousFromArgv, type PortableAsset } from './portable-update'
@@ -43,10 +43,18 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
   /** The user asked to restart once things finish. Cleared by any restart or by cancelling. */
   let waiting: RestartWork | null = null
   let quietSince: number | null = null
-  const status = (): UpdateStatus => ({ ...state, currentVersion: app.getVersion(), channel, justUpdated, restartWaiting: waiting })
+  /** "Update and restart" was clicked before the download finished. */
+  let afterDownload: UpdateRestartMode | null = null
+  const status = (): UpdateStatus => ({ ...state, currentVersion: app.getVersion(), channel, justUpdated, restartWaiting: waiting, restartAfterDownload: afterDownload !== null })
   const set = (next: UpdateState): void => {
     state = next
+    if (next.state === 'error' || (next.state === 'available' && next.reason !== undefined)) afterDownload = null
     if (!window.isDestroyed()) window.webContents.send(UPDATE_IPC.status, status())
+    if (next.state === 'ready' && afterDownload !== null) {
+      const mode = afterDownload
+      afterDownload = null
+      setImmediate(() => restartWhenReady(mode))
+    }
   }
 
   if (channel === 'installer') {
@@ -125,6 +133,26 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
     }
   }
 
+  /** Restarts into the downloaded update: at once, or once nothing would be interrupted. A chat
+   *  started while it downloaded is waited for, unless the user already chose to interrupt. */
+  function restartWhenReady(mode: UpdateRestartMode): void {
+    if (state.state !== 'ready') return
+    if (mode === 'now' || nothingToInterrupt(currentWork())) { restartIntoUpdate(); return }
+    waiting = currentWork()
+    quietSince = null
+    broadcast()
+  }
+
+  async function download(): Promise<void> {
+    if (state.state !== 'available' || state.reason !== undefined) return
+    if (channel === 'installer') {
+      set({ state: 'downloading', version: state.version, percent: 0 })
+      try { await autoUpdater.downloadUpdate() } catch (err) { set({ state: 'error', message: friendlyError(err) }) }
+    } else if (channel === 'portable') {
+      await downloadPortableUpdate()
+    }
+  }
+
   /** The chat on screen, as the window last said. */
   let openChat: ResumeChat | null = null
   let resumedChat = opts.resumedChat
@@ -154,14 +182,14 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
   ipcMain.handle(UPDATE_IPC.check, () => check())
   ipcMain.handle(UPDATE_IPC.install, () => { restartIntoUpdate() })
   // The only way an update is downloaded: the user clicked Download.
-  ipcMain.handle(UPDATE_IPC.download, async () => {
+  ipcMain.handle(UPDATE_IPC.download, () => download())
+  ipcMain.handle(UPDATE_IPC.updateAndRestart, async (_e, raw: unknown) => {
+    const mode: UpdateRestartMode = raw === 'now' ? 'now' : 'whenFinished'
+    if (state.state === 'ready') { restartWhenReady(mode); return }
+    if (state.state === 'downloading') { afterDownload = mode; broadcast(); return }
     if (state.state !== 'available' || state.reason !== undefined) return
-    if (channel === 'installer') {
-      set({ state: 'downloading', version: state.version, percent: 0 })
-      try { await autoUpdater.downloadUpdate() } catch (err) { set({ state: 'error', message: friendlyError(err) }) }
-    } else if (channel === 'portable') {
-      await downloadPortableUpdate()
-    }
+    afterDownload = mode
+    await download()
   })
   ipcMain.handle(UPDATE_IPC.setHold, (_e, value: unknown) => { hold = value === true })
   ipcMain.handle(UPDATE_IPC.work, () => currentWork())
@@ -177,7 +205,7 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
     quietSince = null
     broadcast()
   })
-  ipcMain.handle(UPDATE_IPC.cancelRestart, () => { stopWaiting(); broadcast() })
+  ipcMain.handle(UPDATE_IPC.cancelRestart, () => { stopWaiting(); afterDownload = null; broadcast() })
   ipcMain.handle(UPDATE_IPC.openDownload, () => {
     const url = state.state === 'available' && state.url !== null ? state.url : `https://github.com/${OWNER}/${REPO}/releases/latest`
     void shell.openExternal(url)
@@ -223,7 +251,7 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
   return {
     dispose() {
       for (const t of timers) clearTimeout(t)
-      for (const ch of [UPDATE_IPC.getStatus, UPDATE_IPC.check, UPDATE_IPC.install, UPDATE_IPC.download, UPDATE_IPC.setHold, UPDATE_IPC.work, UPDATE_IPC.restartWhenFinished, UPDATE_IPC.cancelRestart, UPDATE_IPC.openDownload, UPDATE_IPC.setOpenChat, UPDATE_IPC.takeResumedChat]) ipcMain.removeHandler(ch)
+      for (const ch of [UPDATE_IPC.getStatus, UPDATE_IPC.check, UPDATE_IPC.install, UPDATE_IPC.download, UPDATE_IPC.updateAndRestart, UPDATE_IPC.setHold, UPDATE_IPC.work, UPDATE_IPC.restartWhenFinished, UPDATE_IPC.cancelRestart, UPDATE_IPC.openDownload, UPDATE_IPC.setOpenChat, UPDATE_IPC.takeResumedChat]) ipcMain.removeHandler(ch)
     }
   }
 }
