@@ -18,7 +18,7 @@ import { Composer } from './components/Composer'
 import { composeStore } from './compose-store'
 import { OpenSubagentContext, SubagentViewer } from './components/SubagentViewer'
 import { ArchivedNotice, readArchivedSeen, writeArchivedSeen } from './components/ArchivedNotice'
-import { NewChatDialog, type SyncChoice } from './components/NewChatDialog'
+import { NewChatDialog } from './components/NewChatDialog'
 import { LiveIndicator } from './components/LiveIndicator'
 import { ChatHeaderControls } from './components/ChatHeaderControls'
 import { SearchOverlay } from './components/SearchOverlay'
@@ -728,7 +728,7 @@ export function App() {
   // shape; a stale response here (the user clicked a different
   // channel/session while this was in flight) is handled the same way --
   // silently dropped rather than clobbering whatever is now open.
-  async function createChat(options: NewProjectOptions, sync: SyncChoice): Promise<{ ok: true } | { ok: false; error: string }> {
+  async function createChat(options: NewProjectOptions): Promise<{ ok: true } | { ok: false; error: string }> {
     // See creatingChatRef's own comment above: this check-and-set happens
     // synchronously, before the first `await`, so a second synchronous
     // invocation (double-click) always observes the flag already set and
@@ -739,9 +739,6 @@ export function App() {
       const outcome = await api.newChat(options)
       if (!outcome.ok) return { ok: false, error: outcome.error }
       await openCreatedChat(options.cwd, outcome.sessionId)
-      if (sync !== 'no') {
-        setStartingSync({ workingDir: options.cwd, name: options.cwd.split(/[\\/]/).filter(p => p.length > 0).pop() ?? options.cwd, ask: sync === 'ask' })
-      }
       return { ok: true }
     } finally {
       creatingChatRef.current = false
@@ -1249,7 +1246,7 @@ export function App() {
     }
     return states
   }, [syncStatus, channels])
-  const [startingSync, setStartingSync] = useState<{ workingDir: string; name: string; ask?: boolean } | null>(null)
+  const [startingSync, setStartingSync] = useState<{ workingDir: string; name: string } | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
   const onSyncProject = (state: ProjectSyncState): void => {
     if (state.kind === 'setup') { setSettingsSection('sync'); setSettingsOpen(true) }
@@ -1986,7 +1983,7 @@ export function App() {
           onDeleted={() => onDeleted(deleteTarget)} />
       )}
       {startingSync !== null && (
-        <StartProjectSync workingDir={startingSync.workingDir} name={startingSync.name} encrypted={syncStatus?.encrypted ?? true} ask={startingSync.ask === true}
+        <StartProjectSync workingDir={startingSync.workingDir} name={startingSync.name} encrypted={syncStatus?.encrypted ?? true}
           onClose={() => setStartingSync(null)} />
       )}
       {syncError !== null && (

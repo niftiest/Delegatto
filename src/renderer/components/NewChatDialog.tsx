@@ -5,7 +5,8 @@ import { EFFORTS } from '../../shared/models'
 import { modelOption, useClaudeModels } from './useClaudeModels'
 import type { FolderTrust } from '../../shared/shell-run-types'
 import type { GithubRepoOption, GithubStatus } from '../../shared/github-types'
-import { projectSyncState, type RemoteProject, type SyncStatus } from '../../shared/sync-types'
+import type { RemoteProject, SyncStatus } from '../../shared/sync-types'
+import { SyncKeyEntry } from './SyncSettings'
 
 /** Modal for starting a brand-new chat (Plan 2 Task 8): a working directory
  *  (typed, or via the native folder picker), whether to run with
@@ -23,9 +24,6 @@ import { projectSyncState, type RemoteProject, type SyncStatus } from '../../sha
  *  report for the manual check. */
 const SEARCH_ABOVE = 10
 
-/** After the chat is made: start syncing its project, ask first, or leave it. */
-export type SyncChoice = 'yes' | 'ask' | 'no'
-
 export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, confirmBypass = false }: {
   defaults: NewChatDefaults
   /** Ask once more before creating a chat that skips permission prompts. */
@@ -36,7 +34,7 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
    *  `{ok:false, error}` (e.g. a cwd that doesn't exist on disk), which this
    *  component shows inline and leaves the dialog open so the user can
    *  correct it. */
-  onCreate: (options: NewProjectOptions, sync: SyncChoice) => Promise<{ ok: true } | { ok: false; error: string }>
+  onCreate: (options: NewProjectOptions) => Promise<{ ok: true } | { ok: false; error: string }>
   /** Opens a project that's just been brought over from another PC, and closes this dialog. */
   onOpenProject: (workingDir: string) => void
 }) {
@@ -89,7 +87,9 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
   const [remote, setRemote] = useState<RemoteProject[]>([])
   const [syncRepos, setSyncRepos] = useState<string[]>([])
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
-  const [syncIt, setSyncIt] = useState(false)
+  // A repo with synced chats that was just clicked: asks whether to bring them, and for the key first if needed.
+  const [offer, setOffer] = useState<{ row: CheckoutRow; step: 'ask' | 'key' | 'loading' } | null>(null)
+  const [offerError, setOfferError] = useState<string | null>(null)
   // A project brought over from another PC, with what to know before opening it.
   const [linked, setLinked] = useState<{ workingDir: string; warnings: string[] } | null>(null)
   const [preparing, setPreparing] = useState(false)
@@ -108,30 +108,31 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
         else setReposError(list.error)
       })
     })
-    void api.syncStatus().then(status => {
-      if (!alive) return
-      setSyncStatus(status)
-      setRemote(status.configured ? status.remoteProjects : [])
-      setSyncRepos([...status.discoveredRepos, ...(status.repo === null ? [] : [status.repo])])
-    }).catch(() => { /* the list just won't show what's synced */ })
+    void api.syncStatus().then(status => { if (alive) applySyncStatus(status) })
+      .catch(() => { /* the list just won't show what's synced */ })
     return () => { alive = false }
   }, [])
 
-  const syncedHere = (syncStatus?.projects ?? []).flatMap(p => p.projectId !== null && p.github !== null ? [p.github] : [])
-  const rows = repos === null && remote.length === 0 ? null : checkoutRows(repos ?? [], remote, syncRepos, syncedHere)
-  const shownRows = rows === null ? [] : filterCheckoutRows(rows, search)
-  const folder = cwd.trim()
-  const alreadySyncing = picked?.syncedHere === true ||
-    (syncStatus !== null && folder.length > 0 && projectSyncState(syncStatus, { cwd: folder })?.kind === 'on')
-  const canSync = syncStatus?.configured === true && picked?.sync == null && !alreadySyncing
-  // A repo picked from the list is asked about once it's cloned and the chat exists, when its
-  // folder is settled; a typed folder keeps the checkbox.
-  const askAfter = canSync && picked !== null && picked.repo !== null && picked.folder === folder
+  function applySyncStatus(status: SyncStatus): void {
+    setSyncStatus(status)
+    setRemote(status.configured ? status.remoteProjects : [])
+    setSyncRepos([...status.discoveredRepos, ...(status.repo === null ? [] : [status.repo])])
+  }
 
-  /** Clicking the picked row again goes back to using a folder. A clone already on this PC is
-   *  used as it is: only a repo that isn't here yet gets fetched. */
+  const syncedHere = (syncStatus?.projects ?? []).flatMap(p => p.projectId !== null && p.github !== null ? [p.github] : [])
+  const withHistory = syncStatus?.syncedRepos ?? []
+  const rows = repos === null && remote.length === 0 ? null : checkoutRows(repos ?? [], remote, syncRepos, syncedHere, withHistory)
+  const shownRows = rows === null ? [] : filterCheckoutRows(rows, search)
+
+  /** Clicking the picked row again goes back to using a folder. A repo with synced chats asks
+   *  first whether to bring them. */
   function pickRow(row: CheckoutRow) {
-    const next = picked?.key === row.key ? null : row
+    if (picked?.key !== row.key && row.hasHistory) { setOfferError(null); setOffer({ row, step: 'ask' }); return }
+    applyPick(picked?.key === row.key ? null : row)
+  }
+
+  /** A clone already on this PC is used as it is: only a repo that isn't here yet gets fetched. */
+  function applyPick(next: CheckoutRow | null) {
     setPicked(next)
     setRepo(next !== null && next.sync === null && !next.onThisPc ? next.repo ?? '' : '')
     setPrepared(null)
@@ -141,6 +142,37 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
     setError(null)
     if (next !== null) setCwd(next.folder)
     else if (cwd === picked?.folder) setCwd(defaults.cwd ?? '')
+  }
+
+  /** Bring the synced chats too. Without the key yet, ask for it, then find the project once linked. */
+  async function acceptOffer(row: CheckoutRow) {
+    if (row.sync !== null) { setOffer(null); applyPick(row); return }
+    if (syncStatus?.configured !== true) { setOffer({ row, step: 'key' }); return }
+    await afterLinked(row)
+  }
+
+  async function afterLinked(row: CheckoutRow) {
+    setOffer({ row, step: 'loading' })
+    // The project list is read just after linking, so give it a moment to arrive.
+    for (let i = 0; i < 20; i++) {
+      const status = await api.syncStatus()
+      applySyncStatus(status)
+      const found = status.remoteProjects.find(p => p.github !== null && row.repo !== null && p.github.toLowerCase() === row.repo.toLowerCase())
+      if (found !== undefined) {
+        const next = checkoutRows(repos ?? [], status.remoteProjects, [], [], []).find(r => r.sync?.projectId === found.projectId)
+        setOffer(null)
+        if (next !== undefined) applyPick(next)
+        return
+      }
+      await new Promise(res => setTimeout(res, 500))
+    }
+    setOffer({ row, step: 'ask' })
+    setOfferError("Linked, but this project's synced chats didn't show up. Try again in a moment.")
+  }
+
+  function declineOffer(row: CheckoutRow) {
+    setOffer(null)
+    if (row.repo !== null) applyPick({ ...row, sync: null, hasHistory: false })
   }
 
   async function bringOver(projectId: string, folder: string) {
@@ -192,7 +224,7 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
     setCreating(true)
     setError(null)
     try {
-      const result = await onCreate(resolved.options, askAfter ? 'ask' : canSync && syncIt ? 'yes' : 'no')
+      const result = await onCreate(resolved.options)
       if (!result.ok) setError(result.error)
     } finally {
       setCreating(false)
@@ -222,6 +254,7 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
                     disabled={preparing} title={r.description ?? undefined} onClick={() => pickRow(r)}>
                     <span className="checkout-name">
                       {r.sync !== null && <span className="checkout-synced" title={`Syncing from ${r.sync.from}`} aria-label="Syncing from another PC">⟳</span>}
+                      {r.sync === null && r.hasHistory && <span className="checkout-synced" title="Has synced chats" aria-label="Has synced chats">⟳</span>}
                       {r.syncedHere && <span className="checkout-synced" title="Syncing from this PC" aria-label="Syncing from this PC">⟳</span>}
                       {r.label}
                     </span>
@@ -229,6 +262,7 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
                       {[
                         r.sync !== null && `Syncing from ${r.sync.from}, ${r.sync.chats} chat${r.sync.chats === 1 ? '' : 's'}`,
                         r.syncedHere && 'Syncing from this PC',
+                        r.sync === null && r.hasHistory && 'Has synced chats',
                         r.onThisPc && 'On this PC',
                         r.isPrivate && 'Private',
                         r.isArchived && 'Archived'
@@ -265,18 +299,6 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
             ? 'Every tool runs without asking — fastest for an unattended run, but Claude can edit files and run commands unprompted.'
             : 'You’ll be asked to Allow or Deny each tool use that needs permission.'}
         </p>
-
-        {askAfter && <p className="field-note">Once it’s set up here, you’ll be asked whether to sync it across your PCs.</p>}
-        {canSync && !askAfter && (
-          <label className="field field-checkbox">
-            <input type="checkbox" checked={syncIt} onChange={e => setSyncIt(e.target.checked)} />
-            <span>Sync this project across your PCs</span>
-          </label>
-        )}
-        {alreadySyncing && <p className="field-note">This project is already syncing across your PCs.</p>}
-        {github?.state === 'ready' && syncStatus !== null && !syncStatus.configured && (
-          <p className="field-note">To sync projects across your PCs, set up Project sync in Settings first.</p>
-        )}
 
         <label className="field">
           <span className="field-label">Model</span>
@@ -319,6 +341,32 @@ export function NewChatDialog({ defaults, onCancel, onCreate, onOpenProject, con
           </button>
         </div>
       </div>
+      {offer !== null && (
+        <div className="modal-overlay" role="presentation" onClick={e => { e.stopPropagation(); if (offer.step !== 'loading') setOffer(null) }}>
+          <div className="modal sync-dialog" role="dialog" aria-label={`Set up ${offer.row.label}`} onClick={e => e.stopPropagation()}>
+            <h2 className="modal-title">{offer.row.label} has synced chats</h2>
+            {offer.step === 'ask' && <>
+              <p className="settings-note">
+                {offer.row.sync !== null
+                  ? `${offer.row.sync.chats} chat${offer.row.sync.chats === 1 ? '' : 's'}, last synced from ${offer.row.sync.from}. `
+                  : 'Another of your PCs syncs this project. '}
+                Bring them here and keep syncing it on this PC too?
+              </p>
+              {offerError !== null && <div className="modal-error">{offerError}</div>}
+              <div className="modal-actions">
+                <button type="button" className="btn-secondary" onClick={() => setOffer(null)}>Cancel</button>
+                {offer.row.repo !== null && <button type="button" className="btn-secondary" onClick={() => declineOffer(offer.row)}>Just clone</button>}
+                <button type="button" className="btn-primary" onClick={() => void acceptOffer(offer.row)}>Clone and sync</button>
+              </div>
+            </>}
+            {offer.step === 'key' && <>
+              <SyncKeyEntry onLinked={() => void afterLinked(offer.row)} />
+              <div className="modal-actions"><button type="button" className="btn-secondary" onClick={() => setOffer({ row: offer.row, step: 'ask' })}>Back</button></div>
+            </>}
+            {offer.step === 'loading' && <p className="settings-note">Getting its synced chats…</p>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

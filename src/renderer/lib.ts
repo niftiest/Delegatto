@@ -1694,13 +1694,17 @@ export type CheckoutRow = {
   sync: { projectId: string; from: string; chats: number } | null
   /** This PC already syncs it. */
   syncedHere: boolean
+  /** It has synced chats this PC doesn't have yet, so picking it offers to bring them. */
+  hasHistory: boolean
 }
 
 /** Projects syncing from other PCs come first, including any with no GitHub repo, then the rest
  *  in the order given. The sync repos themselves aren't projects, so they're left out.
- *  `syncedHere` lists the GitHub repos of projects this PC syncs. */
-export function checkoutRows(repos: GithubRepoOption[], remote: RemoteProject[], syncRepos: string[], syncedHere: string[] = []): CheckoutRow[] {
+ *  `syncedHere` lists the GitHub repos of projects this PC syncs; `withHistory`, the repos with
+ *  synced chats, which a PC knows before it has the key. */
+export function checkoutRows(repos: GithubRepoOption[], remote: RemoteProject[], syncRepos: string[], syncedHere: string[] = [], withHistory: string[] = []): CheckoutRow[] {
   const here = new Set(syncedHere.map(r => r.toLowerCase()))
+  const history = new Set(withHistory.map(r => r.toLowerCase()))
   const hidden = new Set(syncRepos.map(r => r.toLowerCase()))
   const byRepo = new Map(repos.map(r => [r.fullName.toLowerCase(), r]))
   const synced = new Set<string>()
@@ -1711,14 +1715,19 @@ export function checkoutRows(repos: GithubRepoOption[], remote: RemoteProject[],
       key: `sync:${p.projectId}`, label: p.github ?? p.name, description: known?.description ?? null,
       isPrivate: known?.isPrivate ?? false, isArchived: known?.isArchived ?? false, onThisPc: known?.onThisPc ?? false,
       folder: known?.onThisPc === true ? known.destination : p.suggestedFolder, repo: p.github,
-      sync: { projectId: p.projectId, from: p.updatedBy, chats: p.chats }, syncedHere: false
+      sync: { projectId: p.projectId, from: p.updatedBy, chats: p.chats }, syncedHere: false, hasHistory: true
     }
   })
-  const rest = repos.filter(r => !hidden.has(r.fullName.toLowerCase()) && !synced.has(r.fullName.toLowerCase())).map((r): CheckoutRow => ({
-    key: `repo:${r.fullName}`, label: r.fullName, description: r.description, isPrivate: r.isPrivate, isArchived: r.isArchived,
-    onThisPc: r.onThisPc, folder: r.destination, repo: r.fullName, sync: null, syncedHere: here.has(r.fullName.toLowerCase())
-  }))
-  return [...first, ...rest]
+  const rest = repos.filter(r => !hidden.has(r.fullName.toLowerCase()) && !synced.has(r.fullName.toLowerCase())).map((r): CheckoutRow => {
+    const name = r.fullName.toLowerCase()
+    return {
+      key: `repo:${r.fullName}`, label: r.fullName, description: r.description, isPrivate: r.isPrivate, isArchived: r.isArchived,
+      onThisPc: r.onThisPc, folder: r.destination, repo: r.fullName, sync: null,
+      syncedHere: here.has(name), hasHistory: history.has(name) && !here.has(name)
+    }
+  })
+  // Repos with chats waiting go up with the synced ones, so they're easy to find.
+  return [...first, ...rest.filter(r => r.hasHistory), ...rest.filter(r => !r.hasHistory)]
 }
 
 /** Rows matching every word typed, in the name or description. */

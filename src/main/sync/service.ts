@@ -18,7 +18,7 @@ import { countImages, mergeFinding, redactSecrets, scanText } from './secret-sca
 import { isSessionId, isTextFile, keyEndingAt, locateRow, readRows, rowKey } from './transcript'
 import type {
   EnableProgress, FindingDecisions, GithubState, LinkOutcome, ProjectScan, RemoteProject, RepoSearch, ResolveOutcome, ScanProgress,
-  SecretFinding, SetupOutcome, SyncChatInfo, SyncConflict, SyncDevice, SyncProjectRow, SyncResult, SyncStatus
+  SecretFinding, SetupOutcome, TurnOnOutcome, SyncChatInfo, SyncConflict, SyncDevice, SyncProjectRow, SyncResult, SyncStatus
 } from '../../shared/sync-types'
 
 /** Keeps chosen projects' chats the same across PCs through a private GitHub repo.
@@ -37,6 +37,8 @@ import type {
 const FORMAT = 'delegatto-sync'
 const FORMAT_VERSION = 1
 const HEADER_FILE = 'delegatto-sync.json'
+/** What the sync repo is called on the user's account, unless that name is taken. */
+const DEFAULT_REPO = 'delegatto-sync'
 const CHUNK_BYTES = 32 * 1024 * 1024
 /** GitHub refuses files over 100 MB. */
 const MAX_REPO_FILE = 95 * 1024 * 1024
@@ -166,7 +168,9 @@ type ProjectMeta = {
   updatedAt: number
 }
 
-type Header = { format: string; version: number; encrypted: boolean; kdf: KdfHeader | null; check: string | null }
+/** `repos` lists the GitHub repos of synced projects, readable without the key, so a PC that
+ *  isn't linked yet can tell which of its repos have chats waiting. Nothing else is. */
+type Header = { format: string; version: number; encrypted: boolean; kdf: KdfHeader | null; check: string | null; repos?: string[] }
 
 type PresenceBody = { name: string; hostname: string; at: number; openChats: string[] }
 
@@ -211,6 +215,13 @@ async function walkFiles(dir: string, rel: string, out: Map<string, LocalFile>):
       if (st !== null) out.set(childRel, { path, size: st.size, mtimeMs: st.mtimeMs })
     }
   }
+}
+
+/** Sorted, each repo once whatever its case, keeping the first spelling seen. */
+function uniqueRepos(repos: string[]): string[] {
+  const seen = new Map<string, string>()
+  for (const r of repos) if (typeof r === 'string' && r.length > 0 && !seen.has(r.toLowerCase())) seen.set(r.toLowerCase(), r)
+  return [...seen.values()].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
 }
 
 /** Every file in the sync repo's checkout, by its path in the repo. */
@@ -261,6 +272,8 @@ export class SyncService {
   private openChat: string | null = null
   private github: GithubState = { state: 'missing', account: null }
   private discovered: string[] = []
+  /** GitHub repos with synced chats, from the headers of the sync repos found above. */
+  private discoveredSynced: string[] = []
   private discoveredAt: number | null = null
   private githubAt = 0
   private scanCache: { at: number; projects: ProjectInfo[] } | null = null
@@ -375,9 +388,12 @@ export class SyncService {
     if (this.discoveredAt !== null && this.now() - this.discoveredAt < STALE_CHECK_MS) return
     this.discoveredAt = this.now()
     void this.deps.hub.privateReposWithFile(HEADER_FILE).then(found => {
-      const repos = found.filter(f => this.parseHeader(f.text) !== null).map(f => f.repo).sort()
-      if (repos.join() === this.discovered.join()) return
+      const headers = found.flatMap(f => { const h = this.parseHeader(f.text); return h === null ? [] : [{ repo: f.repo, header: h }] })
+      const repos = headers.map(h => h.repo).sort()
+      const synced = uniqueRepos(headers.flatMap(h => h.header.repos ?? []))
+      if (repos.join() === this.discovered.join() && synced.join() === this.discoveredSynced.join()) return
       this.discovered = repos
+      this.discoveredSynced = synced
       this.deps.onChange()
     }).catch(err => console.warn('[sync] could not look for a sync repo', err))
   }
@@ -457,6 +473,32 @@ export class SyncService {
         return { ok: false, error: errorText(e) }
       }
     })
+  }
+
+  /** Turns on project sync with no choices to make: links to the account's sync repo when it
+   *  has one (which needs the recovery key), or makes a private one with a new key. */
+  async turnOn(recoveryKey: string | null): Promise<TurnOnOutcome> {
+    const github = await this.deps.hub.status()
+    if (github.state !== 'ready' || github.account === null) return { ok: false, error: 'Sign in to GitHub first.' }
+    let found: Array<{ repo: string; text: string }>
+    try {
+      found = (await this.deps.hub.privateReposWithFile(HEADER_FILE)).filter(f => this.parseHeader(f.text) !== null)
+    } catch (e) {
+      return { ok: false, error: `Couldn't check GitHub for an existing sync repo: ${errorText(e)}` }
+    }
+    const preferred = `${github.account}/${DEFAULT_REPO}`.toLowerCase()
+    const existing = found.find(f => f.repo.toLowerCase() === preferred) ?? found.sort((a, b) => a.repo.localeCompare(b.repo))[0]
+    if (existing !== undefined) {
+      const header = this.parseHeader(existing.text)!
+      if (header.encrypted && (recoveryKey === null || recoveryKey.trim().length === 0)) return { ok: false, needsKey: true, repo: existing.repo }
+      return this.setupExisting({ name: existing.repo, recoveryKey: recoveryKey ?? '' })
+    }
+    for (let n = 1; n <= 5; n++) {
+      const name = n === 1 ? DEFAULT_REPO : `${DEFAULT_REPO}-${n}`
+      const view = await this.deps.hub.view(`${github.account}/${name}`).catch(() => ({ exists: true, isPrivate: null }))
+      if (!view.exists) return this.setupNew({ name, encrypted: true })
+    }
+    return { ok: false, error: `Couldn't find a free name for the sync repo. Rename or delete your ${DEFAULT_REPO} repos and try again.` }
   }
 
   private async freshClone(repo: string): Promise<void> {
@@ -739,6 +781,7 @@ export class SyncService {
       await this.git!.pull()
       await this.git!.removePath(`data/${projectId}`)
       await this.git!.removePath(`catalog/${projectId}.bin`)
+      await this.updateHeaderRepos()
       if (await this.git!.hasChanges() && !await this.git!.commitAndPush('Remove a project')) {
         throw new Error('Another PC synced at the same moment. Try again.')
       }
@@ -808,6 +851,28 @@ export class SyncService {
         return { ok: false, error: errorText(e) }
       }
     })
+  }
+
+  /** The header's list of GitHub repos with synced chats, as it stands in the local copy. */
+  private headerRepos(): string[] {
+    try {
+      return this.parseHeader(readFileSync(join(this.repoDir, HEADER_FILE), 'utf8'))?.repos ?? []
+    } catch {
+      return []
+    }
+  }
+
+  /** Brings the header's repo list in line with the catalog. Each PC works it out the same way,
+   *  so two PCs never write it back and forth. */
+  private async updateHeaderRepos(): Promise<void> {
+    await this.loadCatalog()
+    const path = join(this.repoDir, HEADER_FILE)
+    let header: Header | null
+    try { header = this.parseHeader(await fsp.readFile(path, 'utf8')) } catch { return }
+    if (header === null) return
+    const repos = uniqueRepos([...this.catalog.values()].flatMap(m => m.github === null ? [] : [m.github]))
+    if (repos.join('\n') === (header.repos ?? []).join('\n')) return
+    atomicWriteText(path, JSON.stringify({ ...header, repos }, null, 2))
   }
 
   /** Stops before reading anything if another PC has put the repo under a new key. */
@@ -984,6 +1049,7 @@ export class SyncService {
         if (await this.syncProject(p, pending)) localChanges = true
       }
       if (localChanges) void this.refreshCatalogue().catch(() => {})
+      await this.updateHeaderRepos()
       if (!await git.hasChanges()) {
         for (const done of pending) done()
         this.state.remoteSha = main
@@ -1626,6 +1692,7 @@ export class SyncService {
       lastError: this.lastError,
       repoSizeBytes: this.repoSize,
       hasRecoveryKey: this.recoveryKey() !== null,
+      syncedRepos: this.state.repo !== null ? this.headerRepos() : this.discoveredSynced,
       projects: rows,
       remoteProjects,
       discoveredRepos: this.discovered,

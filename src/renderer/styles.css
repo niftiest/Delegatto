@@ -1614,3 +1614,6 @@ html[data-custom-font] body *:not(pre):not(pre *):not(code) { font-family:var(--
 .plugin-scope { display:flex; align-items:center; gap:6px; font-size:13px; }
 .plugin-desc { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 .plugin-note { margin:4px 0 8px; }
+.sync-advanced { margin-top:18px; border-top:1px solid var(--line); padding-top:10px; }
+.sync-advanced > summary { cursor:pointer; color:var(--mu); font-size:13px; user-select:none; }
+.sync-advanced[open] > summary { margin-bottom:10px; }

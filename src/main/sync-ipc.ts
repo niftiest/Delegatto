@@ -193,6 +193,7 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
     [SYNC_IPC.removeFromGithub]: (_e, id: string) => service.removeFromGithub(String(id ?? '')),
     [SYNC_IPC.startFresh]: () => service.startFresh(),
     [SYNC_IPC.recoveryKey]: () => service.recoveryKey(),
+    [SYNC_IPC.turnOn]: (_e, key: string | null) => service.turnOn(typeof key === 'string' ? key : null),
     [SYNC_IPC.replaceRecoveryKey]: () => service.replaceRecoveryKey(),
     [SYNC_IPC.disconnect]: () => service.disconnect()
   }

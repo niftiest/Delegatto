@@ -298,6 +298,7 @@ const sync: SyncApi = {
   syncRemoveFromGithub: id => ipcRenderer.invoke(SYNC_IPC.removeFromGithub, id),
   syncStartFresh: () => ipcRenderer.invoke(SYNC_IPC.startFresh),
   syncRecoveryKey: () => ipcRenderer.invoke(SYNC_IPC.recoveryKey),
+  syncTurnOn: key => ipcRenderer.invoke(SYNC_IPC.turnOn, key),
   syncReplaceRecoveryKey: () => ipcRenderer.invoke(SYNC_IPC.replaceRecoveryKey),
   syncDisconnect: () => ipcRenderer.invoke(SYNC_IPC.disconnect)
 }

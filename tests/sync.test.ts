@@ -151,7 +151,10 @@ beforeEach(() => {
     async header() {
       try { return git(bare, 'show', 'main:delegatto-sync.json') } catch { return null }
     },
-    privateReposWithFile: async () => []
+    async privateReposWithFile() {
+      const text = await hub.header(REPO)
+      return text === null ? [] : [{ repo: REPO, text }]
+    }
   }
 })
 
@@ -301,6 +304,53 @@ describe('setting up', () => {
     const b = makePc('PC-B')
     const linked = await b.service.setupExisting({ name: 'delegatto-sync', recoveryKey: newRecoveryKey() })
     expect(linked).toEqual({ ok: false, error: "That recovery key doesn't match this sync repo." })
+  })
+})
+
+describe('turning sync on', () => {
+  it('makes an encrypted repo with no questions when the account has none', async () => {
+    const a = makePc('PC-A')
+    const r = await a.service.turnOn(null)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.repo).toBe(REPO)
+    expect(r.encrypted).toBe(true)
+    expect(r.recoveryKey).not.toBeNull()
+    expect(a.service.recoveryKey()).toBe(r.recoveryKey)
+  })
+
+  it('asks for the key when the account already has a sync repo, then links with it', async () => {
+    const a = makePc('PC-A')
+    const made = await a.service.turnOn(null)
+    const b = makePc('PC-B')
+    expect(await b.service.turnOn(null)).toEqual({ ok: false, needsKey: true, repo: REPO })
+    expect((await b.service.turnOn(newRecoveryKey())).ok).toBe(false)
+    const linked = await b.service.turnOn(made.ok ? made.recoveryKey : null)
+    expect(linked.ok).toBe(true)
+    expect((await b.service.status()).configured).toBe(true)
+  })
+
+  it('lists synced GitHub repos where a PC without the key can read them, and keeps the list current', async () => {
+    const a = makePc('PC-A')
+    await a.service.turnOn(null)
+    const root = a.tree.workDir('Shop')
+    mkdirSync(join(root, '.git'), { recursive: true })
+    writeFileSync(join(root, '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/me/Shop.git\n')
+    const sid = randomUUID()
+    a.tree.addSessionRaw(root, sid, userRow(root, sid, 'hi'), assistantRow(root, sid, 'done'))
+    await ok(a.service.enableProject(root, NO_DECISIONS))
+    expect(JSON.parse(git(bare, 'show', 'main:delegatto-sync.json')).repos).toEqual(['me/Shop'])
+    expect((await a.service.status()).syncedRepos).toEqual(['me/Shop'])
+
+    // A PC that hasn't linked sees it too, from the header alone.
+    const b = makePc('PC-B')
+    await b.service.status()
+    await new Promise(r => setTimeout(r, 50))
+    expect((await b.service.status()).syncedRepos).toEqual(['me/Shop'])
+
+    const projectId = (await a.service.status()).projects.find(p => p.projectId !== null)!.projectId!
+    await ok(a.service.removeFromGithub(projectId))
+    expect(JSON.parse(git(bare, 'show', 'main:delegatto-sync.json')).repos).toEqual([])
   })
 })
 

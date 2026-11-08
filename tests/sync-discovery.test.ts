@@ -89,6 +89,10 @@ describe('the list in New Chat', () => {
     const rows = checkoutRows([repo('me/a'), repo('me/b')], [], [], ['ME/B'])
     expect(rows.map(r => [r.label, r.syncedHere])).toEqual([['me/a', false], ['me/b', true]])
   })
+  it('marks and lifts repos with synced chats, known before this PC has the key', () => {
+    const rows = checkoutRows([repo('me/a'), repo('me/b'), repo('me/c')], [], [], ['me/c'], ['ME/B', 'me/c'])
+    expect(rows.map(r => [r.label, r.hasHistory, r.syncedHere])).toEqual([['me/b', true, false], ['me/a', false, false], ['me/c', false, true]])
+  })
   it('leaves out the sync repo itself', () => {
     expect(checkoutRows([repo('me/delegatto-sync'), repo('me/a')], [], ['ME/delegatto-sync']).map(r => r.label)).toEqual(['me/a'])
   })

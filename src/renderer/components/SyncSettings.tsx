@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { ago } from './SyncChat'
 import type {
-  EnableProgress, FindingDecisions, ProjectScan, RemoteProject, RepoSearch, SecretFinding, SyncProjectRow, SyncStatus
+  EnableProgress, FindingDecisions, ProjectScan, SecretFinding, SyncProjectRow, SyncStatus
 } from '../../shared/sync-types'
 
-const DEFAULT_REPO = 'delegatto-sync'
 
 function size(bytes: number): string {
   if (bytes >= 2 ** 30) return `${(bytes / 2 ** 30).toFixed(2)} GB`
@@ -21,7 +20,6 @@ export function SyncSettings() {
   const [scanning, setScanning] = useState<string | null>(null)
   const [review, setReview] = useState<{ row: SyncProjectRow; scan: ProjectScan } | null>(null)
   const [pending, setPending] = useState<SyncProjectRow | null>(null)
-  const [linking, setLinking] = useState<RemoteProject | null>(null)
   const [turnedOff, setTurnedOff] = useState<SyncProjectRow[]>([])
 
   useEffect(() => {
@@ -33,7 +31,7 @@ export function SyncSettings() {
 
   if (recoveryKey !== null) return <RecoveryKeyPanel recoveryKey={recoveryKey} onDone={() => setRecoveryKey(null)} />
   if (status.github.state !== 'ready') return <GithubNeeded state={status.github.state} onRecheck={() => void api.syncStatus().then(setStatus)} />
-  if (!status.configured) return <SetupPanel account={status.github.account} previousRepo={status.repo} discovered={status.discoveredRepos} onKey={setRecoveryKey} />
+  if (!status.configured) return <TurnOnPanel account={status.github.account} onKey={setRecoveryKey} />
 
   const report = (r: { ok: true } | { ok: false; error: string }): void => setMessage(r.ok ? null : r.error)
   const synced = status.projects.filter(p => p.projectId !== null)
@@ -54,44 +52,12 @@ export function SyncSettings() {
 
   return (
     <>
-      <div className="sync-card">
-        <div className="sync-card-title">{status.repo}{status.encrypted ? ' · encrypted' : ''}</div>
-        <div className="settings-note">
-          {status.busy ? `${status.activity ?? 'Working'}…` : status.lastSyncAt === null ? 'Not synced yet.' : `Last synced ${ago(status.lastSyncAt)}.`}
-          {status.repoSizeBytes !== null && ` Repo is ${size(status.repoSizeBytes)} on GitHub.`}
-        </div>
-        {status.lastError !== null && <div className="modal-error">{status.lastError}</div>}
-        {status.repoSizeBytes !== null && status.repoSizeBytes > 2 ** 30 && (
-          <p className="settings-note">GitHub suggests keeping repos under 1 GB. “Start fresh” below removes old versions, and syncing fewer projects helps too.</p>
-        )}
-        <div className="sync-actions">
-          <button type="button" className="btn-primary" disabled={status.busy} onClick={() => void api.syncNow().then(report)}>Sync now</button>
-        </div>
-      </div>
-
+      <p className="settings-note">
+        {status.busy ? `${status.activity ?? 'Working'}…` : status.lastSyncAt === null ? 'Project sync is on.' : `Project sync is on. Last synced ${ago(status.lastSyncAt)}.`}
+      </p>
+      {status.lastError !== null && <div className="modal-error">{status.lastError}</div>}
       {message !== null && <div className="modal-error">{message}</div>}
-
-      {status.encrypted && (status.hasRecoveryKey
-        ? <RecoveryKeyReveal />
-        : (
-          <div className="sync-card">
-            <div className="sync-card-title">Recovery key</div>
-            <p className="settings-note">This PC doesn’t have the recovery key saved. It was set up before Delegatto kept a copy. If no PC has it, make a new one here.</p>
-            <DangerButton label="Make a new recovery key" busy={status.busy}
-              confirm="This encrypts everything in the sync repo again under a new key, and removes its old history, which used the old key. Your chats stay. Other PCs stop syncing until you disconnect them and link them again with the new key."
-              onConfirm={() => void api.syncReplaceRecoveryKey().then(r => { if (r.ok) { setMessage(null); setRecoveryKey(r.recoveryKey) } else setMessage(r.error) })} />
-          </div>
-        ))}
-
-      <label className="settings-row">
-        <div className="settings-row-label">This PC’s name<span className="settings-hint">Shown on other PCs, as in “Open on {status.deviceName}”.</span></div>
-        <input type="text" defaultValue={status.deviceName} placeholder={status.hostname}
-          onBlur={e => { void api.syncSetDeviceName(e.target.value) }} />
-      </label>
-      <label className="settings-row">
-        <div className="settings-row-label">Sync automatically<span className="settings-hint">Checks GitHub every minute or two, and after each reply. Off: only when you press Sync now.</span></div>
-        <input type="checkbox" checked={status.auto} onChange={e => { void api.syncSetAuto(e.target.checked) }} />
-      </label>
+      <p className="settings-note">To sync a project, right-click it in the project list and choose <strong>Sync across PCs</strong>. To bring a synced project to this PC, start a New chat and pick it from your GitHub projects: synced ones are marked ⟳.</p>
 
       {status.conflicts.length > 0 && (
         <>
@@ -105,24 +71,8 @@ export function SyncSettings() {
         </>
       )}
 
-      {status.remoteProjects.length > 0 && (
-        <>
-          <h3 className="settings-sub">On other PCs ({status.remoteProjects.length})</h3>
-          <p className="settings-note">Choose where each goes on this PC. It clones the project’s repo there, if it has one, then brings its chats over.</p>
-          {status.remoteProjects.map(r => (
-            <div key={r.projectId} className="sync-row">
-              <div>
-                <strong>{r.name}</strong>
-                <div className="settings-note">{r.chats} chat{r.chats === 1 ? '' : 's'} · last from {r.updatedBy} {ago(r.updatedAt)}{r.github !== null ? ` · ${r.github}` : ' · no GitHub repo'}</div>
-              </div>
-              <button type="button" className="btn-secondary" disabled={status.busy} onClick={() => setLinking(r)}>Set up here…</button>
-            </div>
-          ))}
-        </>
-      )}
-
-      <h3 className="settings-sub">Syncing ({synced.length})</h3>
-      {synced.length === 0 && justOff.length === 0 && <p className="settings-note">No projects yet. Turn sync on by right-clicking a project in the chat list, in a chat’s Project options, or when you create a new chat.</p>}
+      <h3 className="settings-sub">Synced projects ({synced.length})</h3>
+      {synced.length === 0 && justOff.length === 0 && <p className="settings-note">None yet.</p>}
       {synced.map(p => (
         <div key={p.workingDir} className={p.pendingFindings.length > 0 ? 'sync-row warn' : 'sync-row'}>
           <div>
@@ -134,12 +84,10 @@ export function SyncSettings() {
           </div>
           <div className="sync-actions">
             {p.pendingFindings.length > 0 && <button type="button" className="btn-primary" onClick={() => setPending(p)}>Review</button>}
-            <button type="button" className="btn-secondary" disabled={status.busy} onClick={() => void api.syncRemoveFromGithub(p.projectId!).then(report)}>Remove from GitHub</button>
-            <label className="sync-toggle">
-              <input type="checkbox" checked disabled={status.busy}
-                onChange={() => { setTurnedOff(off => [...off.filter(o => o.workingDir !== p.workingDir), { ...p, projectId: null }]); void api.syncDisableProject(p.projectId!).then(report) }} />
-              Sync
-            </label>
+            <button type="button" className="btn-secondary" disabled={status.busy} title="Stops syncing it on this PC. Your other PCs and the copy on GitHub carry on."
+              onClick={() => { setTurnedOff(off => [...off.filter(o => o.workingDir !== p.workingDir), { ...p, projectId: null }]); void api.syncDisableProject(p.projectId!).then(report) }}>
+              De-sync
+            </button>
           </div>
         </div>
       ))}
@@ -148,33 +96,81 @@ export function SyncSettings() {
           <div>
             <strong>{p.name}</strong>
             <div className="settings-note">{p.workingDir}</div>
-            <div className="settings-note">Not syncing. Its chats stay on this PC and on GitHub.</div>
+            <div className="settings-note">Not syncing on this PC. Its chats stay here, and on GitHub for your other PCs.</div>
           </div>
           <div className="sync-actions">
-            <label className="sync-toggle">
-              <input type="checkbox" checked={false} disabled={scanning !== null || status.busy} onChange={() => void optIn(p)} />
+            <button type="button" className="btn-secondary" disabled={scanning !== null || status.busy} onClick={() => void optIn(p)}>
               {scanning === p.workingDir ? 'Checking…' : 'Sync'}
-            </label>
+            </button>
           </div>
         </div>
       ))}
 
-      {status.devices.length > 0 && (
-        <>
-          <h3 className="settings-sub">PCs</h3>
-          {status.devices.map(d => (
-            <div key={d.id} className="sync-row">
-              <div><strong>{d.name}{d.isThisPc ? ' (this PC)' : ''}</strong><div className="settings-note">{d.hostname} · last seen {ago(d.lastSeenAt)}</div></div>
-            </div>
-          ))}
-        </>
-      )}
+      <h3 className="settings-sub">Recovery key</h3>
+      {status.hasRecoveryKey
+        ? <RecoveryKeyReveal />
+        : (
+          <>
+            <p className="settings-note">This PC doesn’t have the recovery key saved. It was set up before Delegatto kept a copy. If no PC has it, make a new one.</p>
+            <DangerButton label="Make a new recovery key" busy={status.busy}
+              confirm="This encrypts everything in the sync repo again under a new key, and removes its old history, which used the old key. Your chats stay. Other PCs stop syncing until you disconnect them and link them again with the new key."
+              onConfirm={() => void api.syncReplaceRecoveryKey().then(r => { if (r.ok) { setMessage(null); setRecoveryKey(r.recoveryKey) } else setMessage(r.error) })} />
+          </>
+        )}
 
-      <h3 className="settings-sub">Maintenance</h3>
-      <DangerButton label="Start fresh" busy={status.busy} confirm="This rebuilds the repo's history so old versions no longer count towards its size. It's also how to clear a leaked secret after removing its chat. Current chats stay. GitHub may keep old data for a while, so change any leaked key regardless. Other PCs catch up by themselves."
-        onConfirm={() => void api.syncStartFresh().then(report)} />
-      <DangerButton label="Disconnect this PC" busy={status.busy} confirm="This PC stops syncing and forgets the key. Your chats here and the repo on GitHub stay as they are. You'd need the recovery key to link again."
-        onConfirm={() => void api.syncDisconnect().then(report)} />
+      <details className="sync-advanced">
+        <summary>Advanced</summary>
+        <label className="settings-row">
+          <div className="settings-row-label">This PC’s name<span className="settings-hint">Shown on other PCs, as in “Open on {status.deviceName}”.</span></div>
+          <input type="text" defaultValue={status.deviceName} placeholder={status.hostname}
+            onBlur={e => { void api.syncSetDeviceName(e.target.value) }} />
+        </label>
+        <label className="settings-row">
+          <div className="settings-row-label">Sync automatically<span className="settings-hint">Checks GitHub every minute or two, and after each reply. Off: only when you press Sync now.</span></div>
+          <input type="checkbox" checked={status.auto} onChange={e => { void api.syncSetAuto(e.target.checked) }} />
+        </label>
+        <div className="sync-actions">
+          <button type="button" className="btn-secondary" disabled={status.busy} onClick={() => void api.syncNow().then(report)}>Sync now</button>
+        </div>
+        <p className="settings-note">Sync repo: {status.repo}{status.repoSizeBytes !== null ? `, ${size(status.repoSizeBytes)} on GitHub` : ''}.</p>
+        {status.repoSizeBytes !== null && status.repoSizeBytes > 2 ** 30 && (
+          <p className="settings-note">GitHub suggests keeping repos under 1 GB. “Start fresh” removes old versions, and syncing fewer projects helps too.</p>
+        )}
+
+        {status.devices.length > 0 && (
+          <>
+            <h3 className="settings-sub">PCs</h3>
+            {status.devices.map(d => (
+              <div key={d.id} className="sync-row">
+                <div><strong>{d.name}{d.isThisPc ? ' (this PC)' : ''}</strong><div className="settings-note">{d.hostname} · last seen {ago(d.lastSeenAt)}</div></div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {synced.length > 0 && (
+          <>
+            <h3 className="settings-sub">Remove from sync everywhere</h3>
+            <p className="settings-note">Deletes a project’s synced chats from GitHub, for every PC. The chats on each PC stay.</p>
+            {synced.map(p => (
+              <DangerButton key={p.workingDir} label={`Remove ${p.name} from GitHub`} busy={status.busy}
+                confirm={`This deletes ${p.name}’s synced chats from GitHub, so no PC can bring them over any more. The chats already on each PC stay. Use “Start fresh” afterwards to clear them from the repo’s history too.`}
+                onConfirm={() => void api.syncRemoveFromGithub(p.projectId!).then(report)} />
+            ))}
+          </>
+        )}
+
+        <h3 className="settings-sub">Maintenance</h3>
+        <DangerButton label="Start fresh" busy={status.busy} confirm="This rebuilds the repo's history so old versions no longer count towards its size. It's also how to clear a leaked secret after removing its chat. Current chats stay. GitHub may keep old data for a while, so change any leaked key regardless. Other PCs catch up by themselves."
+          onConfirm={() => void api.syncStartFresh().then(report)} />
+        {status.hasRecoveryKey && (
+          <DangerButton label="Make a new recovery key" busy={status.busy}
+            confirm="This encrypts everything in the sync repo again under a new key, and removes its old history, which used the old key. Your chats stay. Other PCs stop syncing until you disconnect them and link them again with the new key."
+            onConfirm={() => void api.syncReplaceRecoveryKey().then(r => { if (r.ok) { setMessage(null); setRecoveryKey(r.recoveryKey) } else setMessage(r.error) })} />
+        )}
+        <DangerButton label="Disconnect this PC" busy={status.busy} confirm="This PC stops syncing and forgets the key. Your chats here and the repo on GitHub stay as they are. You'd need the recovery key to link again."
+          onConfirm={() => void api.syncDisconnect().then(report)} />
+      </details>
 
       {review !== null && (
         <ReviewDialog title={`Sync ${review.row.name}?`} findings={review.scan.findings} encrypted={status.encrypted}
@@ -187,8 +183,65 @@ export function SyncSettings() {
           onCancel={() => setPending(null)}
           onDone={d => { const id = pending.projectId!; setPending(null); void api.syncDecideFindings(id, d).then(report) }} />
       )}
-      {linking !== null && <LinkDialog project={linking} onClose={() => setLinking(null)} />}
     </>
+  )
+}
+
+/** Before sync is on: one button. Links to the account's sync repo when there is one, which
+ *  needs its recovery key, or makes one. */
+function TurnOnPanel({ account, onKey }: { account: string | null; onKey: (key: string) => void }) {
+  const [needsKey, setNeedsKey] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [working, setWorking] = useState(false)
+
+  async function turnOn(): Promise<void> {
+    setWorking(true); setError(null)
+    const r = await api.syncTurnOn(null)
+    setWorking(false)
+    if (r.ok) { if (r.recoveryKey !== null) onKey(r.recoveryKey) }
+    else if ('needsKey' in r) setNeedsKey(true)
+    else setError(r.error)
+  }
+
+  return (
+    <>
+      <p className="settings-note">Keeps a project’s chats the same on all your PCs, through a private repo on your GitHub account{account !== null ? ` (${account})` : ''}. Chats are encrypted before they leave this PC. Only chats sync, not code: a project’s own repo is cloned when you set it up on another PC.</p>
+      {needsKey ? (
+        <SyncKeyEntry onLinked={() => { /* status updates by itself */ }} />
+      ) : (
+        <>
+          {error !== null && <div className="modal-error">{error}</div>}
+          <div className="sync-actions">
+            <button type="button" className="btn-primary" disabled={working} onClick={() => void turnOn()}>{working ? 'Turning on…' : 'Turn on project sync'}</button>
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
+/** Asks for the recovery key of the account's existing sync repo, and links this PC with it. */
+export function SyncKeyEntry({ onLinked }: { onLinked: () => void }) {
+  const [key, setKey] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [working, setWorking] = useState(false)
+  async function link(): Promise<void> {
+    setWorking(true); setError(null)
+    const r = await api.syncTurnOn(key)
+    setWorking(false)
+    if (r.ok) onLinked()
+    else setError('needsKey' in r ? 'Enter the recovery key.' : r.error)
+  }
+  return (
+    <div className="sync-card">
+      <p className="settings-note">Your GitHub account already syncs projects from another PC. Enter its recovery key to link this PC. On a PC that already syncs, it’s in Settings &gt; Project sync &gt; Recovery key.</p>
+      <input className="field-input" type="password" value={key} autoFocus placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" aria-label="Recovery key"
+        onChange={e => setKey(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && key.trim().length > 0 && !working) void link() }} />
+      {error !== null && <div className="modal-error">{error}</div>}
+      <div className="sync-actions">
+        <button type="button" className="btn-primary" disabled={working || key.trim().length === 0} onClick={() => void link()}>{working ? 'Linking…' : 'Link this PC'}</button>
+      </div>
+    </div>
   )
 }
 
@@ -249,90 +302,12 @@ function GithubNeeded({ state, onRecheck }: { state: 'missing' | 'signed_out' | 
   )
 }
 
-function SetupPanel({ account, previousRepo, discovered, onKey }: { account: string | null; previousRepo: string | null; discovered: string[]; onKey: (key: string) => void }) {
-  const [name, setName] = useState(previousRepo ?? DEFAULT_REPO)
-  const [encrypted, setEncrypted] = useState(true)
-  const [found, setFound] = useState<RepoSearch | null>(null)
-  const [recovery, setRecovery] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [working, setWorking] = useState(false)
-
-  useEffect(() => {
-    setFound(null)
-    if (name.trim().length === 0) return
-    const timer = setTimeout(() => { void api.syncFindRepo(name).then(setFound) }, 400)
-    return () => clearTimeout(timer)
-  }, [name])
-
-  // A repo found on the account takes over from the suggested name, unless the user typed one.
-  const onlyFound = discovered.length === 1 ? discovered[0]! : null
-  useEffect(() => {
-    if (onlyFound !== null) setName(current => current === DEFAULT_REPO ? onlyFound : current)
-  }, [onlyFound])
-
-  async function create(): Promise<void> {
-    setWorking(true); setError(null)
-    const r = await api.syncSetupNew({ name, encrypted })
-    setWorking(false)
-    if (!r.ok) setError(r.error)
-    else if (r.recoveryKey !== null) onKey(r.recoveryKey)
-  }
-  async function link(): Promise<void> {
-    setWorking(true); setError(null)
-    const r = await api.syncSetupExisting({ name, recoveryKey: recovery })
-    setWorking(false)
-    if (!r.ok) setError(r.error)
-  }
-
-  const canLink = found?.exists === true && found.isSyncRepo
-  const blocked = found?.exists === true && !found.isSyncRepo
-  return (
-    <>
-      <p className="settings-note">Keeps chosen projects’ chats the same on your PCs, through a private GitHub repo you own{account !== null ? ` (signed in as ${account})` : ''}. Only the chats sync, not your code. A project’s own repo gets cloned where you choose.</p>
-      <label className="settings-row">
-        <div className="settings-row-label">Sync repository<span className="settings-hint">A private repo for Delegatto’s use. It’s made for you if it doesn’t exist.</span></div>
-        <input type="text" value={name} onChange={e => setName(e.target.value)} />
-      </label>
-      {discovered.length > 1 && (
-        <div className="sync-found">
-          <span className="settings-note">Sync repos on your account:</span>
-          {discovered.map(r => <button key={r} type="button" className="btn-secondary" onClick={() => setName(r)}>{r}</button>)}
-        </div>
-      )}
-      {found?.error !== null && found?.error !== undefined && <div className="modal-error">{found.error}</div>}
-      {blocked && <div className="modal-error">{found.repo} already exists and isn’t a sync repo. Choose another name.</div>}
-      {canLink ? (
-        <>
-          <p className="settings-note">{found.repo} is already a sync repo, set up from another PC.{found.isPrivate !== true ? ' It isn’t private, so it can’t be used.' : ''}</p>
-          {found.encrypted === true && (
-            <label className="settings-row">
-              <div className="settings-row-label">Recovery key<span className="settings-hint">The key shown when the repo was set up.</span></div>
-              <input type="password" value={recovery} onChange={e => setRecovery(e.target.value)} placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" />
-            </label>
-          )}
-          {error !== null && <div className="modal-error">{error}</div>}
-          <div className="sync-actions"><button type="button" className="btn-primary" disabled={working || found.isPrivate !== true} onClick={() => void link()}>{working ? 'Linking…' : 'Link this PC'}</button></div>
-        </>
-      ) : (
-        <>
-          <label className="settings-row">
-            <div className="settings-row-label">Encrypt before uploading<span className="settings-hint">Recommended. If your GitHub login leaked, or the repo was made public by accident, your chats would still be unreadable. A new PC needs the recovery key, and losing it means losing the synced copy.</span></div>
-            <input type="checkbox" checked={encrypted} onChange={e => setEncrypted(e.target.checked)} />
-          </label>
-          {error !== null && <div className="modal-error">{error}</div>}
-          <div className="sync-actions"><button type="button" className="btn-primary" disabled={working || blocked || name.trim().length === 0} onClick={() => void create()}>{working ? 'Setting up…' : 'Create private repo'}</button></div>
-        </>
-      )}
-    </>
-  )
-}
-
 function RecoveryKeyPanel({ recoveryKey, onDone }: { recoveryKey: string; onDone: () => void }) {
   const [saved, setSaved] = useState(false)
   return (
     <div className="sync-card">
       <div className="sync-card-title">Save your recovery key</div>
-      <p className="settings-note">You need it to link another PC. It isn’t stored anywhere you can get it back from, and without it the synced copy can’t be read. Your chats on this PC aren’t affected.</p>
+      <p className="settings-note">You need it to link another PC. You can see it again any time in Settings &gt; Project sync on this PC, or on any PC linked with it.</p>
       <code className="sync-key">{recoveryKey}</code>
       <div className="sync-actions">
         <button type="button" className="btn-secondary" onClick={() => { void navigator.clipboard.writeText(recoveryKey) }}>Copy</button>
@@ -348,33 +323,7 @@ type Choice = 'redact' | 'allow' | 'exclude'
 /** Starts syncing a project from outside Settings: checks it for likely secrets, then shows the
  *  same review, which a project with nothing in it yet doesn't need. Closing this while the
  *  first upload runs doesn't stop it, and Settings shows any error from then on. */
-export function StartProjectSync({ workingDir, name, encrypted, ask = false, onClose }: {
-  workingDir: string
-  name: string
-  encrypted: boolean
-  /** Ask whether to sync it at all before checking anything, as after cloning a repo. */
-  ask?: boolean
-  onClose: () => void
-}) {
-  const [asking, setAsking] = useState(ask)
-  if (asking) {
-    return (
-      <div className="modal-overlay" onClick={e => e.stopPropagation()}>
-        <div className="modal sync-dialog" role="dialog" aria-label={`Sync ${name}?`}>
-          <h2 className="modal-title">Sync {name} across your PCs?</h2>
-          <p className="settings-note">Its chats, starting with this one, will be on your other PCs too, and stay up to date as you work. You can change this later in Settings &gt; Project sync.</p>
-          <div className="modal-actions">
-            <button type="button" className="btn-secondary" onClick={onClose}>Not now</button>
-            <button type="button" className="btn-primary" onClick={() => setAsking(false)}>Sync it</button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-  return <StartProjectSyncSteps workingDir={workingDir} name={name} encrypted={encrypted} onClose={onClose} />
-}
-
-function StartProjectSyncSteps({ workingDir, name, encrypted, onClose }: {
+export function StartProjectSync({ workingDir, name, encrypted, onClose }: {
   workingDir: string
   name: string
   encrypted: boolean
@@ -524,58 +473,6 @@ function ReviewDialog({ title, intro, findings, images, encrypted, actionLabel, 
           <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
           <button type="button" className="btn-primary" onClick={finish}>{actionLabel}</button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-function LinkDialog({ project, onClose }: { project: RemoteProject; onClose: () => void }) {
-  const [folder, setFolder] = useState(project.suggestedFolder)
-  const [working, setWorking] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState<{ workingDir: string; chats: number; warnings: string[] } | null>(null)
-
-  async function browse(): Promise<void> {
-    const picked = await api.pickDirectory()
-    if (picked !== null) setFolder(picked)
-  }
-  async function link(): Promise<void> {
-    setWorking(true); setError(null)
-    const r = await api.syncLinkProject(project.projectId, folder)
-    setWorking(false)
-    if (r.ok) setDone(r)
-    else setError(r.error)
-  }
-
-  return (
-    <div className="modal-overlay" onClick={e => e.stopPropagation()}>
-      <div className="modal sync-dialog">
-        <h2 className="modal-title">Set up {project.name} on this PC</h2>
-        {done !== null ? (
-          <>
-            <p className="settings-note">{done.chats} chat{done.chats === 1 ? '' : 's'} brought over to {done.workingDir}.</p>
-            {done.warnings.map(w => <div key={w} className="sync-warn-text">{w}</div>)}
-            <div className="modal-actions"><button type="button" className="btn-primary" onClick={onClose}>Done</button></div>
-          </>
-        ) : (
-          <>
-            <p className="settings-note">{project.github !== null ? `This clones ${project.github}${project.branch !== null ? ` (${project.branch})` : ''} into the folder, then brings over the ${project.chats} chat${project.chats === 1 ? '' : 's'}, pointed at it.` : `This project has no GitHub repo, so only its ${project.chats} chat${project.chats === 1 ? '' : 's'} come over.`}</p>
-            {project.unpushed > 0 && <div className="sync-warn-text">{project.updatedBy} has {project.unpushed} commit{project.unpushed === 1 ? '' : 's'} not pushed, so this copy won’t have them.</div>}
-            {project.uncommitted > 0 && <div className="sync-warn-text">{project.updatedBy} has {project.uncommitted} changed file{project.uncommitted === 1 ? '' : 's'} not committed, so this copy won’t have them.</div>}
-            <label className="field">
-              <span className="field-label">Folder on this PC</span>
-              <div className="field-row">
-                <input className="field-input" value={folder} onChange={e => setFolder(e.target.value)} />
-                <button type="button" className="btn-secondary" onClick={() => void browse()}>Browse…</button>
-              </div>
-            </label>
-            {error !== null && <div className="modal-error">{error}</div>}
-            <div className="modal-actions">
-              <button type="button" className="btn-secondary" disabled={working} onClick={onClose}>Cancel</button>
-              <button type="button" className="btn-primary" disabled={working || folder.trim().length === 0} onClick={() => void link()}>{working ? 'Setting up…' : 'Set up here'}</button>
-            </div>
-          </>
-        )}
       </div>
     </div>
   )

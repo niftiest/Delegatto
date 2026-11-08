@@ -24,6 +24,7 @@ export const SYNC_IPC = {
   removeFromGithub: 'sync:removeFromGithub',
   startFresh: 'sync:startFresh',
   recoveryKey: 'sync:recoveryKey',
+  turnOn: 'sync:turnOn',
   replaceRecoveryKey: 'sync:replaceRecoveryKey',
   disconnect: 'sync:disconnect'
 } as const
@@ -136,6 +137,8 @@ export type SyncStatus = {
   repoSizeBytes: number | null
   /** This PC saved the recovery key when it made the repo or was linked with it. */
   hasRecoveryKey: boolean
+  /** GitHub repos with synced chats. Known without the key, so New chat can mark them. */
+  syncedRepos: string[]
   projects: SyncProjectRow[]
   remoteProjects: RemoteProject[]
   conflicts: SyncConflict[]
@@ -157,6 +160,9 @@ export type SyncChatInfo = {
 export type SetupOutcome =
   | { ok: true; repo: string; recoveryKey: string | null; encrypted: boolean }
   | { ok: false; error: string }
+
+/** Turning sync on: `needsKey` means the account already has a sync repo, so ask for its key. */
+export type TurnOnOutcome = SetupOutcome | { ok: false; needsKey: true; repo: string }
 
 export type LinkOutcome =
   | { ok: true; workingDir: string; chats: number; warnings: string[] }
@@ -231,6 +237,8 @@ export type SyncApi = {
   syncChatOpened(sessionPk: number | null): void
   syncRemoveFromGithub(projectId: string): Promise<SyncResult>
   syncStartFresh(): Promise<SyncResult>
+  /** Links to the account's sync repo with this key, or makes one when there's none. */
+  syncTurnOn(recoveryKey: string | null): Promise<TurnOnOutcome>
   /** The recovery key, when this PC saved it; null otherwise. */
   syncRecoveryKey(): Promise<string | null>
   /** Re-encrypts the repo under a new recovery key, which comes back once to show. */
