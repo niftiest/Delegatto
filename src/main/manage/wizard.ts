@@ -96,11 +96,14 @@ export class DeleteWizard {
     const paths = this.deps.paths
     if (target.scope === 'chat') {
       const row = this.db.prepare(`
-        SELECT s.file_path AS filePath, s.session_id AS sessionId, COALESCE(s.custom_title, s.ai_title, s.title) AS title, p.dir_name AS dirName
+        SELECT s.file_path AS filePath, s.session_id AS sessionId, s.custom_title AS title, p.dir_name AS dirName, p.cwd AS cwd,
+          (SELECT friendly_name FROM channel_meta WHERE dir_name = p.dir_name) AS projectName
         FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?
-      `).get(target.sessionPk) as { filePath: string; sessionId: string; title: string | null; dirName: string } | undefined
+      `).get(target.sessionPk) as { filePath: string; sessionId: string; title: string | null; dirName: string; cwd: string | null; projectName: string | null } | undefined
       if (row === undefined) throw new Error('That chat is no longer in the catalog.')
-      const name = row.title ?? row.sessionId.slice(0, 8)
+      // The name the user gave the chat, or else its project's: a first message is no name.
+      const folder = row.cwd === null ? null : row.cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? null
+      const name = row.title ?? row.projectName ?? folder ?? row.sessionId.slice(0, 8)
       const project = await scanProject(paths, row.dirName)
       if (project === null) {
         const cwd = (this.db.prepare('SELECT cwd FROM projects WHERE dir_name = ?').get(row.dirName) as { cwd: string | null } | undefined)?.cwd

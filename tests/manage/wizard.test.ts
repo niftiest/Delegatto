@@ -88,15 +88,18 @@ describe('DeleteWizard, several projects', () => {
     expect(projectRows(db)).toEqual([encodePath(c)])
   })
 
-  it('names a chat the way the chat list does: its own name, then the made-up one, then its first message', async () => {
+  it('names a chat by the name it was given, or else by its project, never by a message in it', async () => {
     const t = tree()
-    const db = catalogWith([encodePath('D:\\Gone\\Project')])
-    const pk = (db.prepare('SELECT id FROM sessions').get() as { id: number }).id
+    const dir = encodePath('D:\\Gone\\HotspotProxy')
+    const db = openCatalog(':memory:')
+    const id = db.prepare('INSERT INTO projects (dir_name, cwd) VALUES (?, ?)').run(dir, 'D:\\Gone\\HotspotProxy').lastInsertRowid
+    const pk = Number(db.prepare("INSERT INTO sessions (project_id, session_id, kind, file_path, title, ai_title) VALUES (?, 's', 'main', 'x.jsonl', 'test', 'Fix the relay')").run(id).lastInsertRowid)
     const w = new DeleteWizard(db, deps(t))
-    db.prepare("UPDATE sessions SET title = 'test', ai_title = 'Fix the proxy relay' WHERE id = ?").run(pk)
-    expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “Fix the proxy relay”')
-    db.prepare("UPDATE sessions SET custom_title = 'Hotspot debugging' WHERE id = ?").run(pk)
-    expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “Hotspot debugging”')
+    expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “HotspotProxy”')
+    db.prepare("INSERT INTO channel_meta (dir_name, friendly_name) VALUES (?, 'Hotspot')").run(dir)
+    expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “Hotspot”')
+    db.prepare("UPDATE sessions SET custom_title = 'Relay debugging' WHERE id = ?").run(pk)
+    expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “Relay debugging”')
   })
 
   it('tells sync about each project it deleted, and only those', async () => {
