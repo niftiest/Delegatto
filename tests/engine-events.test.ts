@@ -272,5 +272,10 @@ describe('parseEvent — a reply Claude Code made up to report a failure', () =>
   it('leaves an ordinary reply without one', () => {
     const line = JSON.stringify({ type: 'assistant', uuid: 'u2', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } })
     expect(parseEvent(line)).not.toHaveProperty('apiError')
+    expect(parseEvent(line)).not.toHaveProperty('synthetic')
+  })
+  it('marks one Claude Code wrote in Claude\'s place, error or not', () => {
+    const line = JSON.stringify({ type: 'assistant', uuid: 'u3', message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }] } })
+    expect(parseEvent(line)).toMatchObject({ kind: 'assistant', synthetic: true })
   })
 })

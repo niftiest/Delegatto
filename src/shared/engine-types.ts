@@ -38,7 +38,8 @@ export type LiveEvent =
   /** `agents` and `skills` are the names Claude Code lists at the start of each turn. */
   | { kind: 'init'; sessionId: string; cwd: string; model: string; permissionMode: string; mcpServers?: McpServerStatus[]; agents?: string[]; skills?: string[] }
   /** `apiError`: Claude Code's kind of failure, such as `authentication_failed`, on a reply it made up to report one. */
-  | { kind: 'assistant'; uuid: string; blocks: ContentBlock[]; usage?: Usage; apiError?: string }
+  /** `synthetic`: Claude Code wrote it in Claude's place, so no reply came from the API. */
+  | { kind: 'assistant'; uuid: string; blocks: ContentBlock[]; usage?: Usage; apiError?: string; synthetic?: true }
   | { kind: 'delta'; text: string }
   /** `interrupted`: the turn stopped because the user asked it to. */
   | { kind: 'result'; isError: boolean; costUsd: number; text: string; interrupted?: boolean }

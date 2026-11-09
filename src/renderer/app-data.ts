@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { api } from './api'
 import type { ChannelRow } from '../shared/types'
 import { FOLDER_MISSING, SHELL_OUTPUT_SENT, type Elicitation, type PermissionRequest, type RemoteSession } from '../shared/engine-types'
+import { limitCleared } from './usage-limit'
 import type { AppSettings } from '../shared/shell-types'
 import { NO_PLAN_USAGE, type PlanUsage } from '../shared/plan-usage'
 import { projectSyncState, type ProjectSyncState, type SyncIncoming, type SyncStatus } from '../shared/sync-types'
@@ -164,6 +165,8 @@ export function useAppData(refreshNav: () => void): AppData {
     }
     // The process that asked is gone, or the turn it asked in is over.
     if (ev.kind === 'exit' || ev.kind === 'result') setChatElicitations(pk, () => [])
+    // A real reply: whatever limit stopped the chats before is over, in every chat.
+    if (ev.kind === 'assistant' && ev.apiError === undefined && ev.synthetic !== true && ev.blocks.length > 0) limitCleared.mark()
     if (ev.kind === 'other' && ev.type === SHELL_OUTPUT_SENT) markSending(pk, true)
     // The folder went while the chat was open: its row moves to Archived.
     if (ev.kind === 'other' && ev.type === FOLDER_MISSING) refreshNavRef.current()

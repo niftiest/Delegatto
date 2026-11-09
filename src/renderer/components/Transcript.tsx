@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode, useState, useSyncExternalStore } from 'react'
 import type { RenderItem } from '../../shared/types'
 import type { PermissionRequest } from '../../shared/engine-types'
 import type { ChannelIcon } from '../../shared/shell-types'
@@ -13,6 +13,7 @@ import { ElicitationCard, QuestionCard } from './QuestionCard'
 import { PlanApprovalCard } from './PlanApprovalCard'
 import { groupToolRuns, toolRunSummary, thoughtRuns, thoughtsLabel, stableItemKeys, groupIntoTurns, hideAnsweredCommands,userMessageParts, shouldScrollToBottom, followAfterScroll, isPlanApproval, isQuestion, formatClock, localDayKey, dayDividerLabel, type LivePreview } from '../lib'
 import { PinBadge, PinnedMessages } from './PinBadge'
+import { hideClearedLimitNotices, limitCleared } from '../usage-limit'
 
 const NO_PINS: ReadonlySet<string> = new Set()
 
@@ -107,10 +108,11 @@ export function Transcript({ pendingToolIds, groupToolCalls = true, items: allIt
   const preview = livePreview ?? null
   // Filter tool cards out here (not upstream) so the durable render model is
   // untouched and toggling the setting re-shows them without a reload.
+  const limitClearedAt = useSyncExternalStore(limitCleared.subscribe, limitCleared.get)
   const items = useMemo(() => {
-    const shown = hideAnsweredCommands(allItems)
+    const shown = hideClearedLimitNotices(hideAnsweredCommands(allItems), limitClearedAt)
     return showToolCalls && showThinking ? shown : shown.filter(it => (showToolCalls || it.kind !== 'tool') && (showThinking || it.kind !== 'thinking'))
-  }, [allItems, showToolCalls, showThinking])
+  }, [allItems, showToolCalls, showThinking, limitClearedAt])
   const parentRef = useRef<HTMLDivElement>(null)
   // Stable React keys so a loadOlder prepend reconciles the existing message
   // DOM in place (no remount), which is what keeps the scroll-preservation

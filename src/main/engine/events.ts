@@ -126,8 +126,10 @@ function parseAssistant(row: Record<string, unknown>): LiveEvent {
   const blocks = blocksFromContent(message.content)
   const usage = extractUsage(message.usage)
   const base: LiveEvent = usage === undefined ? { kind: 'assistant', uuid, blocks } : { kind: 'assistant', uuid, blocks, usage }
+  // Written by Claude Code, not Claude: no request reached the API.
+  const made = message.model === '<synthetic>' ? { ...base, synthetic: true as const } : base
   // A reply Claude Code made up to report an API failure says which kind, such as an expired sign-in.
-  return typeof row.error === 'string' && row.error.length > 0 ? { ...base, apiError: row.error } : base
+  return typeof row.error === 'string' && row.error.length > 0 ? { ...made, apiError: row.error } : made
 }
 
 /** A subagent's message, as one line for showing what it's doing. */
