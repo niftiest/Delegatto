@@ -300,6 +300,51 @@ describe('loadTranscript', () => {
     }
   })
 
+  it('the newest page and every older page match a walk of the whole chat, with side chains mixed in', async () => {
+    // The newest page and "load older" read only one page through the index; jumping to a
+    // message still walks the whole chat. A jump past the end lands on the newest page, so the
+    // two paths can be held against each other on a long chat.
+    const longHome = mkdtempSync(join(tmpdir(), 'cc-tx-long-'))
+    try {
+      const proj = join(longHome, 'projects', 'C--Long')
+      mkdirSync(proj, { recursive: true })
+      const rows: object[] = []
+      let parent: string | null = null
+      for (let i = 0; i < 230; i++) {
+        const uuid = `m${i}`
+        const role = i % 2 === 0 ? 'user' : 'assistant'
+        rows.push({ type: role, uuid, parentUuid: parent, timestamp: '2026-07-23T10:00:00Z', message: { role, content: `msg-${i}` } })
+        parent = uuid
+        // A subagent's row every few messages: never part of the main chat's pages.
+        if (i % 7 === 3) rows.push({ type: 'assistant', uuid: `side${i}`, parentUuid: uuid, isSidechain: true, timestamp: '2026-07-23T10:00:00Z', message: { role: 'assistant', content: `side-${i}` } })
+      }
+      writeFileSync(join(proj, '33333333-3333-3333-3333-333333333333.jsonl'), rows.map(r => JSON.stringify(r)).join('\n') + '\n')
+      const db = openCatalog(':memory:')
+      await runIndex(db, { home: longHome })
+      const { id } = db.prepare("SELECT id FROM sessions WHERE kind='main'").get() as { id: number }
+      const uuids = (p: { items: Array<{ uuid?: string }> }): Array<string | undefined> => p.items.map(i => i.uuid)
+
+      for (const limit of [1, 7, 60, 229, 230, 500]) {
+        const newest = await loadTranscript(db, id, { limit })
+        const walked = await loadTranscript(db, id, { limit, fromSeq: Number.MAX_SAFE_INTEGER })
+        expect(uuids(newest)).toEqual(uuids(walked))
+        expect([newest.oldestSeq, newest.hasMore]).toEqual([walked.oldestSeq, walked.hasMore])
+      }
+
+      // Paging back to the start covers every message once, in order.
+      const seen: Array<string | undefined> = []
+      let page = await loadTranscript(db, id, { limit: 60 })
+      for (;;) {
+        seen.unshift(...uuids(page))
+        if (!page.hasMore) break
+        page = await loadTranscript(db, id, { limit: 60, before: page.oldestSeq! })
+      }
+      expect(seen).toEqual(Array.from({ length: 230 }, (_, i) => `m${i}`))
+    } finally {
+      rmSync(longHome, { recursive: true, force: true })
+    }
+  })
+
   it('pages with no gap and no overlap: oldestSeq fed back as before yields the exact adjacent page', async () => {
     // A plain 5-message chain, one text block per message, so every rendered
     // item maps 1:1 to a message uuid -- isolating the page-boundary math

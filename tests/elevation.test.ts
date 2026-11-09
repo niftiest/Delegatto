@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   runKeyAddArgs, runKeyDeleteArgs, schtasksCreateArgs, schtasksDeleteArgs,
   elevatedRelaunchArgs, TASK_NAME, RUN_VALUE_NAME, RUN_KEY,
-  ELEVATED_RELAUNCH_ARG, LOCK_RETRY_FOR_MS, LOCK_RETRY_EVERY_MS, relaunchEnv, shouldRetryInstanceLock
+  ELEVATED_RELAUNCH_ARG, LOCK_RETRY_FOR_MS, LOCK_RETRY_EVERY_MS, relaunchEnv, shouldRetryInstanceLock,
+  runKeyQueryArgs, schtasksQueryArgs, applyStartupWith
 } from '../src/main/elevation'
 
 describe('elevation command builders', () => {
@@ -90,5 +91,46 @@ describe('shouldRetryInstanceLock', () => {
     expect(LOCK_RETRY_EVERY_MS).toBe(250)
     expect(shouldRetryInstanceLock(argv, LOCK_RETRY_FOR_MS)).toBe(false)
     expect(shouldRetryInstanceLock(argv, LOCK_RETRY_FOR_MS + 5_000)).toBe(false)
+  })
+})
+
+describe('applyStartupWith', () => {
+  const exe = 'C:\Program Files\Delegatto\Delegatto.exe'
+  /** A fake reg/schtasks: records each command as it finishes, and a removal takes longer, out of order
+   *  if the code doesn't wait, so a step that doesn't wait for the one before shows up. */
+  function fakeWindows(present: { runKey: boolean; task: boolean }) {
+    const calls: string[] = []
+    const run = async (bin: string, args: string[]): Promise<boolean> => {
+      const cmd = `${bin} ${args[0]}`
+      await new Promise(r => setTimeout(r, cmd.includes('delete') ? 5 : 1))
+      calls.push(cmd)
+      if (args[0] === 'query') return present.runKey
+      if (args[0] === '/query') return present.task
+      return true
+    }
+    return { calls, run }
+  }
+
+  it('only deletes what is there, so nothing fails on a clean PC', async () => {
+    const w = fakeWindows({ runKey: false, task: false })
+    await applyStartupWith(w.run, { startWithWindows: false, startWithAdmin: false, exePath: exe })
+    expect(w.calls).toEqual(['reg query', 'schtasks /query'])
+  })
+
+  it('removes the old entry before making the new one, one step at a time', async () => {
+    const w = fakeWindows({ runKey: true, task: true })
+    await applyStartupWith(w.run, { startWithWindows: true, startWithAdmin: true, exePath: exe })
+    expect(w.calls).toEqual(['reg query', 'reg delete', 'schtasks /query', 'schtasks /delete', 'schtasks /create'])
+  })
+
+  it('uses the Run key without admin', async () => {
+    const w = fakeWindows({ runKey: false, task: true })
+    await applyStartupWith(w.run, { startWithWindows: true, startWithAdmin: false, exePath: exe })
+    expect(w.calls).toEqual(['reg query', 'schtasks /query', 'schtasks /delete', 'reg add'])
+  })
+
+  it('query commands look up exactly the entries the app writes', () => {
+    expect(runKeyQueryArgs()).toEqual(['query', RUN_KEY, '/v', RUN_VALUE_NAME])
+    expect(schtasksQueryArgs()).toEqual(['/query', '/tn', TASK_NAME])
   })
 })

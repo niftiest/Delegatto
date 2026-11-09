@@ -87,12 +87,12 @@ function createWindow(): void {
   // Older registrations didn't pass AUTOSTART_ARG; refresh the plain Run key
   // (the admin scheduled task is only rewritten from Settings, elevated).
   if (startup.startWithWindows && !startup.startWithAdmin && app.isPackaged) {
-    applyStartupSettings({ startWithWindows: true, startWithAdmin: false, exePath: launchExePath(app.getPath('exe')), appArgs: [AUTOSTART_ARG] })
+    void applyStartupSettings({ startWithWindows: true, startWithAdmin: false, exePath: launchExePath(app.getPath('exe')), appArgs: [AUTOSTART_ARG] })
   }
   // Just restarted as administrator from Settings: the unelevated instance couldn't create
   // the highest-privilege logon task, so this one does.
   if (startup.startWithWindows && startup.startWithAdmin && app.isPackaged && process.argv.includes(ELEVATED_RELAUNCH_ARG)) {
-    applyStartupSettings({ startWithWindows: true, startWithAdmin: true, exePath: launchExePath(app.getPath('exe')), appArgs: [AUTOSTART_ARG] })
+    void applyStartupSettings({ startWithWindows: true, startWithAdmin: true, exePath: launchExePath(app.getPath('exe')), appArgs: [AUTOSTART_ARG] })
   }
 
   // Never open bigger than the screen: 1080p at 150% scaling is only 1280x720.

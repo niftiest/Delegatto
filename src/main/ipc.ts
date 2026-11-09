@@ -52,6 +52,36 @@ const LOOKAHEAD_ROWS = 5
 const JUMP_CONTEXT_ROWS = 10
 
 type NodeRow = { uuid: string; seq: number }
+type PageNodes = { window: NodeRow[]; hasMore: boolean }
+
+/** The newest page of messages, or the page just before `before`, oldest first. Reads only
+ *  those rows plus one (to know whether there are more), newest first through the
+ *  (session_pk, seq) index. The open chat reloads this page every few seconds while Claude
+ *  works, so it must not walk every message of a long chat. Null when there are none. */
+function newestPage(db: Catalog, sessionPk: number, chainFilter: string, limit: number, before: number | undefined): PageNodes | null {
+  const rows = (before === undefined
+    ? db.prepare(`SELECT uuid, seq FROM messages WHERE session_pk = ? ${chainFilter} ORDER BY seq DESC LIMIT ?`).all(sessionPk, limit + 1)
+    : db.prepare(`SELECT uuid, seq FROM messages WHERE session_pk = ? ${chainFilter} AND seq < ? ORDER BY seq DESC LIMIT ?`).all(sessionPk, before, limit + 1)
+  ) as NodeRow[]
+  if (rows.length === 0) return null
+  return { window: rows.slice(0, limit).reverse(), hasMore: rows.length > limit }
+}
+
+/** Going to a message: everything from it on, so the view stays one unbroken run, plus a few
+ *  before it to read it in context. Rare enough to walk the whole chat. */
+function jumpPage(db: Catalog, sessionPk: number, chainFilter: string, limit: number, before: number | undefined, fromSeq: number): PageNodes | null {
+  const nodes = db.prepare(
+    `SELECT uuid, seq FROM messages WHERE session_pk = ? ${chainFilter} ORDER BY seq`
+  ).all(sessionPk) as NodeRow[]
+  const eligible = before === undefined ? nodes : nodes.filter(n => n.seq < before)
+  if (eligible.length === 0) return null
+  const target = eligible.findIndex(n => n.seq >= fromSeq)
+  const windowStart = target === -1
+    ? Math.max(0, eligible.length - limit)
+    : Math.min(Math.max(0, target - JUMP_CONTEXT_ROWS), Math.max(0, eligible.length - limit))
+  const window = eligible.slice(windowStart)
+  return { window, hasMore: eligible.length > window.length }
+}
 
 /** A chat whose transcript has gone, from the text the catalog saved of it. Tool calls and
  *  their output weren't saved. Null when there's no text to show. */
@@ -100,33 +130,17 @@ export async function loadTranscript(
   // So we render all message rows in seq (write) order and window over them.
   // Sidechain rows stay excluded — subagent traffic belongs nested in its Task
   // card, not inline in the main timeline.
-  const nodes = db.prepare(
-    `SELECT uuid, seq FROM messages WHERE session_pk = ? ${chainFilter} ORDER BY seq`
-  ).all(sessionPk) as NodeRow[]
-  if (nodes.length === 0) return empty
-
-  const seqOf = new Map(nodes.map(n => [n.uuid, n.seq]))
-  const livePath = nodes.map(n => n.uuid)                 // uuids, oldest -> newest (chronological)
-
-  const eligible = opts.before === undefined
-    ? livePath
-    : livePath.filter(uuid => (seqOf.get(uuid) ?? -1) < opts.before!)
-  if (eligible.length === 0) return empty
-
   // A caller-supplied limit of 0 or negative would otherwise slice an empty
   // (or backwards) window; clamp to at least one message per page.
   const limit = Math.max(1, opts.limit ?? PAGE_SIZE)
-  // Going to a message: everything from it on, so the view stays one unbroken run,
-  // plus a few before it to read it in context.
-  const target = opts.fromSeq === undefined ? -1 : eligible.findIndex(uuid => (seqOf.get(uuid) ?? -1) >= opts.fromSeq!)
-  const windowStart = target === -1
-    ? Math.max(0, eligible.length - limit)
-    : Math.min(Math.max(0, target - JUMP_CONTEXT_ROWS), Math.max(0, eligible.length - limit))
-  const window = eligible.slice(windowStart)
-  const windowSet = new Set(window)
-
-  const firstSeq = seqOf.get(window[0]!)!
-  const lastSeq = seqOf.get(window[window.length - 1]!)!
+  const page = opts.fromSeq === undefined
+    ? newestPage(db, sessionPk, chainFilter, limit, opts.before)
+    : jumpPage(db, sessionPk, chainFilter, limit, opts.before, opts.fromSeq)
+  if (page === null) return empty
+  const { window, hasMore } = page
+  const windowSet = new Set(window.map(n => n.uuid))
+  const firstSeq = window[0]!.seq
+  const lastSeq = window[window.length - 1]!.seq
 
   const start = db.prepare(
     'SELECT byte_offset AS o FROM messages WHERE session_pk = ? AND seq = ?'
@@ -171,14 +185,14 @@ export async function loadTranscript(
     // gone -- almost always Claude Code's cleanupPeriodDays pruning an old chat.
     // Flag it so the UI shows an "archived / removed from disk" state rather
     // than an empty "no messages" one.
-    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') return savedTextPage(db, sessionPk, window, firstSeq, eligible.length > window.length, chainFilter) ?? { ...empty, fileMissing: true }
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') return savedTextPage(db, sessionPk, window.map(n => n.uuid), firstSeq, hasMore, chainFilter) ?? { ...empty, fileMissing: true }
     throw err
   }
 
   return {
     items: buildRenderItems(messages, windowSet),
     oldestSeq: firstSeq,
-    hasMore: eligible.length > window.length
+    hasMore
   }
 }
 
@@ -314,12 +328,12 @@ export function registerIpc(db: Catalog, hub: WindowHub, hooks: IpcHooks = {}): 
   ipcMain.handle(IPC.updateSettings, async (e, patch: Partial<AppSettings>) => {
     const before = getSettings(db)
     let after = updateSettings(db, patch)
-    const applyStartup = (s: AppSettings): void => applyStartupSettings({
+    const applyStartup = (s: AppSettings): void => { void applyStartupSettings({
       startWithWindows: s.startWithWindows,
       startWithAdmin: s.startWithAdmin,
       exePath: launchExePath(app.getPath('exe')),
       appArgs: [AUTOSTART_ARG]
-    })
+    }) }
     // Reconcile OS startup registration when a startup/admin field changed.
     if (before.startWithWindows !== after.startWithWindows || before.startWithAdmin !== after.startWithAdmin) {
       // Newly enabling admin: relaunch elevated (one UAC prompt). This instance quits only

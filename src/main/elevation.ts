@@ -93,24 +93,49 @@ export function isElevated(): boolean {
   }
 }
 
+/** `reg query` argv: succeeds only when the Run-key entry exists. */
+export function runKeyQueryArgs(): string[] {
+  return ['query', RUN_KEY, '/v', RUN_VALUE_NAME]
+}
+
+/** `schtasks /query` argv: succeeds only when the scheduled task exists. */
+export function schtasksQueryArgs(): string[] {
+  return ['/query', '/tn', TASK_NAME]
+}
+
+type StartupOpts = { startWithWindows: boolean; startWithAdmin: boolean; exePath: string; appArgs?: string[] }
+/** Runs one reg/schtasks command; true when it succeeded. */
+type RunCommand = (bin: string, args: string[]) => Promise<boolean>
+
+/** Brings the startup registration in line with the settings, one command at a time: a
+ *  removal still running when the new entry is made could remove that too. Each entry is
+ *  looked up before it's removed, so a clean PC logs no failures (whatever Windows' language). */
+export async function applyStartupWith(run: RunCommand, opts: StartupOpts): Promise<void> {
+  const args = opts.appArgs ?? []
+  // Clear both mechanisms first, then set the one that applies, so the two never linger
+  // together after a toggle change.
+  if (await run('reg', runKeyQueryArgs())) await run('reg', runKeyDeleteArgs())
+  if (await run('schtasks', schtasksQueryArgs())) await run('schtasks', schtasksDeleteArgs())
+  if (opts.startWithWindows && opts.startWithAdmin) {
+    await run('schtasks', schtasksCreateArgs(opts.exePath, args))
+  } else if (opts.startWithWindows) {
+    await run('reg', runKeyAddArgs(opts.exePath, args))
+  }
+}
+
 /** Reconcile the OS startup registration with the settings. `startWithWindows`
  *  + `startWithAdmin` together use a scheduled task; `startWithWindows` alone
- *  uses the Run key; neither removes both. Best-effort; errors are logged. */
-export function applyStartupSettings(
-  opts: { startWithWindows: boolean; startWithAdmin: boolean; exePath: string; appArgs?: string[] }
-): void {
-  if (!isWindows) return
-  const args = opts.appArgs ?? []
-  const run = (bin: string, a: string[]) => execFile(bin, a, { windowsHide: true }, err => { if (err) console.warn(`[elevation] ${bin} failed`, err.message) })
-  // Clear both mechanisms first, then set the one that applies — keeps the two
-  // from lingering together after a toggle change.
-  run('reg', runKeyDeleteArgs())
-  run('schtasks', schtasksDeleteArgs())
-  if (opts.startWithWindows && opts.startWithAdmin) {
-    run('schtasks', schtasksCreateArgs(opts.exePath, args))
-  } else if (opts.startWithWindows) {
-    run('reg', runKeyAddArgs(opts.exePath, args))
-  }
+ *  uses the Run key; neither removes both. Best-effort; failures are logged. */
+export function applyStartupSettings(opts: StartupOpts): Promise<void> {
+  if (!isWindows) return Promise.resolve()
+  const run: RunCommand = (bin, a) => new Promise(resolve => {
+    execFile(bin, a, { windowsHide: true }, err => {
+      // A lookup that finds nothing is an answer, not a failure.
+      if (err && a[0] !== 'query' && a[0] !== '/query') console.warn(`[elevation] ${bin} failed`, err.message)
+      resolve(err === null)
+    })
+  })
+  return applyStartupWith(run, opts).catch(err => console.warn('[elevation] startup registration failed', err))
 }
 
 /** Relaunch elevated (one UAC prompt). Resolves once PowerShell has exited:
