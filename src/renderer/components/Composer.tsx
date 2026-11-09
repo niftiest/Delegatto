@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import { api } from '../api'
 import {
   collapsePastedText, queueReducer, imageFromDataUrl, buildOutgoingText, isRewindCommand,
-  applyCompletion, commandTokenLength, completionAt, fileMention, filterCommands, matchesCommandName, rankFiles,
+  agentMention, agentOptions, applyCompletion, commandTokenRanges, completionAt, fileMention, filterCommands, keywordRanges, matchesCommandName,
+  midMessageCommands, rankMentions, sendsAsTyped,
   type ComposerImage, type PastedTextChip, type QueueAction, type QueuedMessage
 } from '../lib'
 import { composeStore, nextHeld, shellCommandOf } from '../compose-store'
@@ -10,8 +11,8 @@ import { filterHistory, stepHistory } from '../prompt-history'
 import type { ExternalLock } from '../../shared/engine-types'
 import type { SyncIncoming } from '../../shared/sync-types'
 import { HIJACK_WORKING_TEXT, hijackBlock } from '../../shared/hijack'
-import type { ClaudeCommand, CommandSource } from '../../shared/claude-info-types'
-import { CompletionMenu, useClaudeCommands, useProjectFiles, type MenuItem } from './ComposerMenu'
+import type { ClaudeAgent, ClaudeCommand, CommandSource } from '../../shared/claude-info-types'
+import { CompletionMenu, useClaudeInfo, useProjectFiles, type MenuItem } from './ComposerMenu'
 import { ComposerThumbnail } from './ChatImage'
 
 const MAX_TEXTAREA_PX = 200
@@ -25,6 +26,13 @@ const SOURCE_TAG: Record<CommandSource, string | null> = { project: 'project', u
 function commandMenuItem(c: ClaudeCommand): MenuItem {
   return { key: c.name, primary: `/${c.name}`, secondary: c.description || c.argumentHint, tag: c.plugin ?? SOURCE_TAG[c.source] }
 }
+
+function agentMenuItem(a: ClaudeAgent): MenuItem {
+  return { key: `agent:${a.type}`, primary: a.type, secondary: a.description, tag: 'agent' }
+}
+
+/** A /name after whitespace somewhere, as the terminal highlights them. */
+const SLASH_TOKEN = /(^|[\s。、？！])\/[a-zA-Z]/
 
 function fileMenuItem(path: string): MenuItem {
   const trimmed = path.replace(/\/$/, '')
@@ -77,7 +85,7 @@ function lockHolder(lock: ExternalLock): string {
   return `${who} (PID ${lock.pid})`
 }
 
-export function Composer({ sessionPk, running, focused = true, settled = false, shellStops = 0, onCycleMode, lock = null, syncing = null, cwd = null, suggestion = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange }: {
+export function Composer({ sessionPk, running, focused = true, settled = false, shellStops = 0, onCycleMode, lock = null, syncing = null, cwd = null, suggestion = null, agents = null, skills = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange }: {
   /** True while a turn is in flight for this session. Enter queues instead
    *  of sending, and Esc interrupts, only while this is true. */
   running: boolean
@@ -102,6 +110,10 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
   /** Ends the terminal holding this chat. Resolves to why it couldn't, or null. */
   /** Claude's guess at the next message: a click or Tab fills the box, never sends. */
   suggestion?: string | null
+  /** The agent types the chat's init listed, for the @ menu. Null before it has run. */
+  agents?: string[] | null
+  /** The skills the chat's init listed: which built-in commands the / menu offers mid-message. */
+  skills?: string[] | null
   onHijack?: () => Promise<string | null>
   /** A message starting with `!`. As in the terminal, during a turn it waits for the
    *  turn to end. Claude then gets the output and replies, with nothing more to send. */
@@ -113,8 +125,10 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
    *  api.send(sessionPk, text, images) verbatim. `pastedTexts` rides along
    *  for a parent that wants the raw chips (e.g. richer optimistic
    *  rendering); it's empty for a drained queue entry, since that text was
-   *  already combined once at enqueue time. */
-  onSend: (text: string, images: ComposerImage[], pastedTexts: PastedTextChip[], uuid?: string) => void
+   *  already combined once at enqueue time. `typed` is true for what the user typed, so
+   *  Claude Code is told a person wrote it; false when only pasted text would set off the
+   *  ultracode keyword (see sendsAsTyped). */
+  onSend: (text: string, images: ComposerImage[], pastedTexts: PastedTextChip[], uuid?: string, typed?: boolean) => void
   /** The user sent something themselves, as opposed to a queued message going by itself. */
   onSubmit?: () => void
   onInterrupt: () => void
@@ -176,22 +190,38 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
   const pendingCaret = useRef<number | null>(null)
   const completion = !blocked && dismissedFor !== text ? completionAt(text, caret) : null
-  const commands = useClaudeCommands(text.startsWith('/'), cwd)
+  const info = useClaudeInfo(text.startsWith('/') || completion !== null || SLASH_TOKEN.test(text), cwd)
+  const commands = typeof info === 'string' ? info : info.commands
   const files = useProjectFiles(completion?.kind === 'file', cwd)
   const knownCommands = useMemo(() => Array.isArray(commands) ? commands : [], [commands])
+  const agentList = useMemo(() => agentOptions(agents, typeof info === 'string' ? [] : info.agents), [agents, info])
+  const midCommands = useMemo(() => midMessageCommands(knownCommands, skills), [knownCommands, skills])
   const matches = useMemo(() => {
     if (completion === null) return { values: [] as string[], items: [] as MenuItem[], found: [] as ClaudeCommand[] }
     if (completion.kind === 'command') {
-      const found = filterCommands(knownCommands, completion.query)
+      // Mid-message, only what Claude Code tells Claude about: skills and prompt commands.
+      const found = filterCommands(completion.mid === true ? midCommands : knownCommands, completion.query)
       return { values: found.map(c => `/${c.name}`), items: found.map(commandMenuItem), found }
     }
-    const found = rankFiles(files ?? [], completion.query)
-    return { values: found.map(fileMention), items: found.map(fileMenuItem), found: [] }
-  }, [completion?.kind, completion?.query, knownCommands, files]) // eslint-disable-line react-hooks/exhaustive-deps
+    const found = rankMentions(files ?? [], agentList, completion.query)
+    return {
+      values: found.map(m => m.kind === 'file' ? fileMention(m.path) : agentMention(m.agent.type)),
+      items: found.map(m => m.kind === 'file' ? fileMenuItem(m.path) : agentMenuItem(m.agent)),
+      found: []
+    }
+  }, [completion?.kind, completion?.query, completion?.mid, knownCommands, midCommands, files, agentList]) // eslint-disable-line react-hooks/exhaustive-deps
   const loading = completion !== null && (completion.kind === 'command' ? commands === 'loading' : files === null)
   const menuNote = loading ? 'Loading…' : null
   const menuOpen = completion !== null && (loading || matches.items.length > 0)
-  const highlight = commandTokenLength(text, knownCommands)
+  const menuLabel = completion?.kind === 'command'
+    ? (completion.mid === true ? 'Skills and commands' : 'Commands')
+    : agentList.length > 0 ? 'Files and agents' : 'Files'
+  // Known commands, and a live "ultracode", which starts a multi-agent workflow.
+  const ultracode = /^\s*!/.test(text) ? [] : keywordRanges(text, 'ultracode')
+  const highlights = [
+    ...commandTokenRanges(text, knownCommands).map(r => ({ ...r, keyword: false })),
+    ...ultracode.map(r => ({ ...r, keyword: true }))
+  ].sort((a, b) => a.start - b.start)
 
   // Set once the user has arrowed to an item: Enter then always takes it.
   const navigated = useRef(false)
@@ -243,7 +273,7 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
     if (!isLead() || !composeStore.claimHeld(sessionPk, next.id)) return
     const command = shellCommandOf(next.text)
     if (command !== null && onShellCommand !== undefined) onShellCommand(command)
-    else onSend(next.text, next.images, [])
+    else onSend(next.text, next.images, [], undefined, next.typed !== false)
   }
   const prevRunning = useRef(running)
   useEffect(() => {
@@ -363,7 +393,7 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
     const resent = tail.filter((_, i) => kept[i]).map(item => {
       if (!item.uuid) return item
       const uuid = crypto.randomUUID()
-      onSend(item.text, item.images, [], uuid)
+      onSend(item.text, item.images, [], uuid, item.typed !== false)
       return { ...item, uuid }
     })
     dispatchQueue({ type: 'set', items: [...after.slice(0, from), ...resent] })
@@ -474,6 +504,7 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
       }
       return
     }
+    const typed = sendsAsTyped(text, pastedChips)
     // A side question doesn't wait for the turn: that's what it's for.
     // Nor does /rewind: it says to stop first, which is only any use now.
     if (running && !/^\s*\/btw\s/.test(wouldSend) && !isRewindCommand(wouldSend)) {
@@ -483,14 +514,14 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
       // shows it here until then, as in the terminal. A slash command has to run on its
       // own, and some are handled here, so those wait for the turn to end.
       const uuid = wouldSend.trimStart().startsWith('/') ? null : crypto.randomUUID()
-      dispatchQueue({ type: 'add', msg: { id: localId('queued'), text: wouldSend, images: imageChips, uuid } })
-      if (uuid !== null) onSend(wouldSend, imageChips, [], uuid)
+      dispatchQueue({ type: 'add', msg: { id: localId('queued'), text: wouldSend, images: imageChips, uuid, typed } })
+      if (uuid !== null) onSend(wouldSend, imageChips, [], uuid, typed)
     } else {
       // Not running: hand the parent the raw pieces and let it do the
       // combine (it calls buildOutgoingText(text, pastedTexts) itself before
       // api.send) -- this mirrors exactly what the drain path below does
       // with an already-combined text and an empty pastedTexts array.
-      onSend(text, imageChips, pastedChips)
+      onSend(text, imageChips, pastedChips, undefined, typed)
     }
     clearCompose()
   }
@@ -530,6 +561,8 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // Keys that choose an IME's candidate (Japanese, Chinese, ...) belong to the IME.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Tab' && e.shiftKey && onCycleMode !== undefined) { e.preventDefault(); setModeNote(`Mode: ${onCycleMode()}`); return }
     if (e.key === 'r' && e.ctrlKey) {
       e.preventDefault()
@@ -559,7 +592,10 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
       const current = matches.found[selected]
       const typedInFull = completion?.kind === 'command' && matches.values[selected] === `/${completion.query}`
       const offNameOnly = completion?.kind === 'command' && current !== undefined && !matchesCommandName(current, completion.query)
-      if (count > 0 && e.key === 'Enter' && !e.shiftKey && !typedInFull && (navigated.current || !offNameOnly)) { e.preventDefault(); pick(selected); return }
+      // Mid-message a / is often a path, so Enter sends, as in the terminal, unless the
+      // user went into the list with the arrows. Tab still takes the item.
+      const enterTakes = completion?.mid === true ? navigated.current : !typedInFull && (navigated.current || !offNameOnly)
+      if (count > 0 && e.key === 'Enter' && !e.shiftKey && enterTakes) { e.preventDefault(); pick(selected); return }
     }
     if (e.key === 'Tab' && showSuggestion) { e.preventDefault(); useSuggestion(); return }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -610,7 +646,7 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
         </div>
       )}
       {menuOpen && (
-        <CompletionMenu label={completion.kind === 'command' ? 'Commands' : 'Files'} items={matches.items}
+        <CompletionMenu label={menuLabel} items={matches.items}
           selected={Math.min(selected, Math.max(matches.items.length - 1, 0))} note={menuNote}
           onPick={pick} onHover={setSelected} />
       )}
@@ -694,9 +730,12 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
       )}
       <div className={`composer-box${blocked ? ' composer-box-locked' : ''}`} onDragOver={handleDragOver} onDrop={handleDrop}>
         <div className="composer-field">
-          {highlight > 0 && (
+          {highlights.length > 0 && (
             <div ref={highlightRef} className="composer-highlight" aria-hidden="true">
-              <mark>{text.slice(0, highlight)}</mark>{text.slice(highlight)}
+              {highlights.map((r, i) => (
+                <span key={r.start}>{text.slice(i === 0 ? 0 : highlights[i - 1]!.end, r.start)}<mark className={r.keyword ? 'composer-keyword' : undefined}>{text.slice(r.start, r.end)}</mark></span>
+              ))}
+              {text.slice(highlights[highlights.length - 1]!.end)}
             </div>
           )}
           <textarea
@@ -728,6 +767,7 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
             : 'Enter queues for Claude\'s next step · Esc stops')}
         </div>
       )}
+      {ultracode.length > 0 && <div className="composer-hint composer-keyword-hint" role="status">“ultracode” asks Claude to run a multi-agent workflow for this message, which uses many more tokens. Put it in quotes to send it as a plain word.</div>}
       {clearHint && <div className="composer-hint" role="status">Esc again to clear</div>}
       {modeNote !== null && <div className="composer-hint" role="status">{modeNote}</div>}
     </div>

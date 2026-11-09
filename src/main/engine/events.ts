@@ -100,7 +100,20 @@ function parseSystem(row: Record<string, unknown>): LiveEvent {
   if (typeof permissionMode !== 'string') return other
   const init: LiveEvent = { kind: 'init', sessionId, cwd, model, permissionMode }
   const mcpServers = parseMcpServers(row.mcp_servers)
-  return mcpServers.length > 0 ? { ...init, mcpServers } : init
+  // The agent types for the @ menu, and which commands are skills, for the / menu mid-message.
+  const agents = namesOf(row.agents)
+  const skills = namesOf(row.skills)
+  return {
+    ...init,
+    ...(mcpServers.length > 0 ? { mcpServers } : {}),
+    ...(agents !== null ? { agents } : {}),
+    ...(skills !== null ? { skills } : {})
+  }
+}
+
+/** A list of names, or null when it isn't a list. */
+function namesOf(raw: unknown): string[] | null {
+  return Array.isArray(raw) ? raw.filter((n): n is string => typeof n === 'string' && n.length > 0) : null
 }
 
 function parseAssistant(row: Record<string, unknown>): LiveEvent {

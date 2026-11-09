@@ -108,7 +108,7 @@ const api: DelegattoApi & EngineApi = {
   importTheme: () => ipcRenderer.invoke(IPC.importTheme),
   isElevated: () => ipcRenderer.invoke(IPC.isElevated),
 
-  send: (sessionPk, text, images, uuid) => { ipcRenderer.send(ENGINE_IPC.send, sessionPk, text, images, uuid) },
+  send: (sessionPk, text, images, uuid, typed) => { ipcRenderer.send(ENGINE_IPC.send, sessionPk, text, images, uuid, typed === true) },
   withdrawQueued: (sessionPk, uuid) => ipcRenderer.invoke(ENGINE_IPC.withdrawQueued, sessionPk, uuid),
   rewindUnanswered: (sessionPk, uuid) => ipcRenderer.invoke(ENGINE_IPC.rewindUnanswered, sessionPk, uuid),
   rewindPoints: sessionPk => ipcRenderer.invoke(ENGINE_IPC.rewindPoints, sessionPk),

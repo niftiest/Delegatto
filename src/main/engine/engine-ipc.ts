@@ -358,8 +358,8 @@ export function registerEngineIpc(db: Catalog, hub: WindowHub, hooks: EngineHook
     return lockMonitor.get(sessionPk)
   })
 
-  const onSend = (_e: unknown, sessionPk: number, text: string, images?: EngineImageInput[], uuid?: string): void => {
-    coordinator.send(sessionPk, text, images, uuid)
+  const onSend = (_e: unknown, sessionPk: number, text: string, images?: EngineImageInput[], uuid?: string, typed?: boolean): void => {
+    coordinator.send(sessionPk, text, images, uuid, typed === true)
   }
   const onInterrupt = (_e: unknown, sessionPk: number): void => {
     coordinator.interrupt(sessionPk)

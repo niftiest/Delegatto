@@ -24,7 +24,7 @@ import { FOLDER_MISSING, PERMISSION_MODES, type BackgroundTask, type LiveEvent, 
 import type { StreamedRow } from '../main/jsonl/stream'
 import { isDisplayRow } from '../main/jsonl/parse'
 import { rewoundUuids } from '../main/jsonl/rewound'
-import { CLEAR_COMMANDS, TERMINAL_ONLY_COMMANDS, type ClaudeCommand, type CommandSource, type McpServerStatus } from '../shared/claude-info-types'
+import { CLEAR_COMMANDS, TERMINAL_ONLY_COMMANDS, type ClaudeAgent, type ClaudeCommand, type CommandSource, type McpServerStatus } from '../shared/claude-info-types'
 import { buildRenderItems, collectToolResults } from '../main/jsonl/render'
 import { EFFORTS } from '../shared/models'
 
@@ -391,7 +391,8 @@ export type ComposerImage = { id: string; mediaType: string; dataBase64: string;
 /** `uuid` means it's already in Claude Code's queue under that name, to be taken in at
  *  Claude's next step. Without one it's held here until the turn ends: slash commands,
  *  which have to run on their own, and anything whose process died. */
-export type QueuedMessage = { id: string; text: string; images: ComposerImage[]; uuid?: string | null }
+/** `typed: false` for one that mustn't go as typed by the user (see sendsAsTyped). */
+export type QueuedMessage = { id: string; text: string; images: ComposerImage[]; uuid?: string | null; typed?: boolean }
 
 export type QueueAction =
   | { type: 'add'; msg: QueuedMessage }
@@ -1471,8 +1472,14 @@ export function isClearCommand(text: string): boolean {
 }
 
 /** What the composer should offer at the caret: a command while the first word
- *  is being typed, a file after an "@" that starts a word (optionally quoted). */
-export type CompletionContext = { kind: 'command' | 'file'; query: string; start: number; end: number }
+ *  is being typed, or after whitespace later on (`mid`), and a file or agent after
+ *  an "@" that starts a word (optionally quoted). */
+export type CompletionContext = { kind: 'command' | 'file'; query: string; start: number; end: number; mid?: true }
+
+/** Where the terminal starts a mid-message / or @: after whitespace or 。、？！ */
+const MID_COMMAND = /[\s\u3002\u3001\uFF1F\uFF01]\/([a-zA-Z0-9._:-]*)$/
+/** Leading commands whose arguments are paths or names: the terminal has no mid-message / after them. */
+const PATH_ARG_COMMANDS = /^\/(add-dir|cd|resume|plugin|plugins|marketplace)(\s|$)/
 
 export function completionAt(text: string, caret: number): CompletionContext | null {
   const before = text.slice(0, caret)
@@ -1480,10 +1487,28 @@ export function completionAt(text: string, caret: number): CompletionContext | n
   if (command !== null && /^\S*(\s|$)/.test(text.slice(caret))) {
     return { kind: 'command', query: command[1]!, start: 0, end: caret + /^\S*/.exec(text.slice(caret))![0].length }
   }
+  const mid = MID_COMMAND.exec(before)
+  // A `!` line is a shell command, where a / is a path or a flag.
+  if (mid !== null && !PATH_ARG_COMMANDS.test(text) && !/^\s*!/.test(text)) {
+    const rest = /^[a-zA-Z0-9._:-]*/.exec(text.slice(caret))![0]
+    // A path such as /usr/bin isn't a command.
+    if (!text.slice(caret + rest.length).startsWith('/')) {
+      return { kind: 'command', query: mid[1]!, start: caret - mid[1]!.length - 1, end: caret + rest.length, mid: true }
+    }
+  }
   const file = /(?:^|\s)@("[^"]*|[^\s"]*)$/.exec(before)
   if (file === null) return null
   const token = file[1]!
   return { kind: 'file', query: token.replace(/^"/, ''), start: caret - token.length - 1, end: caret }
+}
+
+/** The commands worth offering mid-message. Claude Code only tells Claude about skills
+ *  and prompt commands there; a built-in or an MCP prompt is just text. A bundled skill
+ *  is listed as a built-in, so `skills` (from the chat's init) says which ones are skills. */
+export function midMessageCommands(commands: ClaudeCommand[], skills: readonly string[] | null): ClaudeCommand[] {
+  const skillNames = new Set(skills ?? [])
+  return commands.filter(c => !c.name.startsWith('mcp__') && c.source !== 'mcp'
+    && (c.source !== 'builtin' || skillNames.has(c.name)))
 }
 
 const SOURCE_ORDER: Record<CommandSource, number> = { project: 0, user: 1, plugin: 2, synced: 3, builtin: 4, mcp: 5 }
@@ -1568,6 +1593,104 @@ export function commandTokenLength(text: string, commands: ClaudeCommand[]): num
   const name = m[1]!.toLowerCase()
   const known = commands.some(c => c.name.toLowerCase() === name || c.aliases.some(a => a.toLowerCase() === name))
   return known || CLEAR_COMMANDS.has(name) ? m[0].length : 0
+}
+
+/** Every known command in `text`, for highlighting, as the terminal does: the leading
+ *  one, and any /name after whitespace later on. A trailing "." isn't part of it. */
+export function commandTokenRanges(text: string, commands: ClaudeCommand[]): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = []
+  const lead = commandTokenLength(text, commands)
+  if (lead > 0) ranges.push({ start: 0, end: lead })
+  const known = new Set(commands.flatMap(c => [c.name, ...c.aliases]).map(n => n.toLowerCase()))
+  const token = /(^|[\s。、？！])(\/[a-zA-Z][a-zA-Z0-9.:\-_]*)/g
+  for (let m = token.exec(text); m !== null; m = token.exec(text)) {
+    const start = m.index + m[1]!.length
+    if (start === 0) continue
+    const name = m[2]!.replace(/\.+$/, '')
+    if (known.has(name.slice(1).toLowerCase())) ranges.push({ start, end: start + name.length })
+  }
+  return ranges
+}
+
+/** Opening and closing marks of the spans Claude Code skips when it looks for a keyword. */
+const KEYWORD_QUOTES: Record<string, string> = { '`': '`', '"': '"', '<': '>', '{': '}', '[': ']', '(': ')', "'": "'" }
+
+/** Where `word` counts as a keyword in `text`, by Claude Code's rule (2.1.319, `Fi`): a
+ *  whole word, case aside, not in quotes, backticks or brackets, not next to / \ or -,
+ *  not before ? or a "." that runs on, and never in a message starting with /. */
+export function keywordRanges(text: string, word: string): Array<{ start: number; end: number }> {
+  if (!text.toLowerCase().includes(word.toLowerCase()) || text.startsWith('/')) return []
+  const isWordChar = (ch: string | undefined): boolean => ch !== undefined && /[\p{L}\p{N}_]/u.test(ch)
+  const skipped: Array<{ start: number; end: number }> = []
+  let open: string | null = null
+  let from = 0
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!
+    if (open !== null) {
+      if (open === '[' && ch === '[') { from = i; continue }
+      if (ch !== KEYWORD_QUOTES[open]) continue
+      if (open === "'" && isWordChar(text[i + 1])) continue
+      skipped.push({ start: from, end: i + 1 })
+      open = null
+    } else if ((ch === '<' && i + 1 < text.length && /[a-zA-Z/]/.test(text[i + 1]!))
+      || (ch === "'" && !isWordChar(text[i - 1]))
+      || (ch !== '<' && ch !== "'" && ch in KEYWORD_QUOTES)) {
+      open = ch
+      from = i
+    }
+  }
+  const found: Array<{ start: number; end: number }> = []
+  for (const m of text.matchAll(new RegExp(`\\b${word}\\b`, 'gi'))) {
+    const start = m.index, end = start + m[0].length
+    if (skipped.some(s => start >= s.start && start < s.end)) continue
+    const prev = text[start - 1], next = text[end]
+    if (prev === '/' || prev === '\\' || prev === '-') continue
+    if (next === '/' || next === '\\' || next === '-' || next === '?') continue
+    if (next === '.' && isWordChar(text[end + 1])) continue
+    found.push({ start, end })
+  }
+  return found
+}
+
+/** Whether a message goes to Claude Code marked as typed by the user. Claude Code looks for
+ *  "ultracode" only in what was typed, never in pasted text, which it keeps apart. Delegatto
+ *  folds pasted text in, so a message whose only live "ultracode" is pasted goes unmarked,
+ *  and so can't start a workflow the user never asked for. */
+export function sendsAsTyped(boxText: string, pastedTexts: PastedTextChip[]): boolean {
+  if (pastedTexts.length === 0) return true
+  return keywordRanges(boxText, 'ultracode').length > 0
+    || keywordRanges(buildOutgoingText(boxText, pastedTexts), 'ultracode').length === 0
+}
+
+/** The agents for the @ menu: the names the chat's init lists when it has run, else
+ *  Claude Code's own list. Descriptions come from Claude Code's list either way. A type
+ *  with a space is left out: Claude Code's `@agent-<type>` can't name it. */
+export function agentOptions(initAgents: readonly string[] | null, infoAgents: readonly ClaudeAgent[]): ClaudeAgent[] {
+  const about = new Map(infoAgents.map(a => [a.type, a.description]))
+  const all = initAgents === null ? [...infoAgents] : initAgents.map(type => ({ type, description: about.get(type) ?? '' }))
+  return all.filter(a => !/\s/.test(a.type))
+}
+
+/** What a chosen agent becomes, as Claude Code reads it. */
+export function agentMention(type: string): string {
+  return `@agent-${type}`
+}
+
+export type MentionOption = { kind: 'file'; path: string } | { kind: 'agent'; agent: ClaudeAgent }
+
+/** Files and agents for what's typed after "@". An agent whose name starts with it goes
+ *  first; one that only contains it comes after the files. A path being typed is files only. */
+export function rankMentions(paths: string[], agents: readonly ClaudeAgent[], query: string): MentionOption[] {
+  const files: MentionOption[] = rankFiles(paths, query).map(path => ({ kind: 'file', path }))
+  if (/[/\\]/.test(query)) return files
+  const q = query.toLowerCase().replace(/^agent-/, '')
+  const first: MentionOption[] = [], after: MentionOption[] = []
+  for (const agent of agents) {
+    const name = agent.type.toLowerCase()
+    if (q !== '' && name.startsWith(q)) first.push({ kind: 'agent', agent })
+    else if (name.includes(q) || `${name} (agent)`.includes(q)) after.push({ kind: 'agent', agent })
+  }
+  return [...first, ...files, ...after]
 }
 
 /** Servers worth warning about: failed ones, and ones needing a sign-in. claude.ai

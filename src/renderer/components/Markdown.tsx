@@ -9,6 +9,7 @@ import dos from 'highlight.js/lib/languages/dos'
 import powershell from 'highlight.js/lib/languages/powershell'
 import { api } from '../api'
 import { splitLinks } from '../lib'
+import { PinBadge } from './PinBadge'
 
 /** Claude's replies, rendered as the terminal would format them. Choices come from
  *  a scan of 10,742 real replies:
@@ -98,6 +99,7 @@ export const Markdown = memo(function Markdown({ text, highlight = true, classNa
 }) {
   return (
     <div className={`md ${className}`} data-msg={anchor}>
+      <PinBadge uuid={anchor} />
       <ReactMarkdown remarkPlugins={REMARK} rehypePlugins={highlight ? REHYPE : []} components={COMPONENTS}>{text}</ReactMarkdown>
     </div>
   )

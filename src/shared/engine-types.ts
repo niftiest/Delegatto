@@ -35,7 +35,8 @@ export const FOLDER_MISSING = 'folder-missing'
 export type PromptEnding = { kind: string | null; kept: boolean; reason: string | null }
 
 export type LiveEvent =
-  | { kind: 'init'; sessionId: string; cwd: string; model: string; permissionMode: string; mcpServers?: McpServerStatus[] }
+  /** `agents` and `skills` are the names Claude Code lists at the start of each turn. */
+  | { kind: 'init'; sessionId: string; cwd: string; model: string; permissionMode: string; mcpServers?: McpServerStatus[]; agents?: string[]; skills?: string[] }
   /** `apiError`: Claude Code's kind of failure, such as `authentication_failed`, on a reply it made up to report one. */
   | { kind: 'assistant'; uuid: string; blocks: ContentBlock[]; usage?: Usage; apiError?: string }
   | { kind: 'delta'; text: string }

@@ -9,10 +9,10 @@ import type { MessageRow } from '../src/main/jsonl/rows'
 import { parseControlResponse, parseEvent } from '../src/main/engine/events'
 import { Transport } from '../src/main/engine/transport'
 import { mcpLoginCommand } from '../src/main/engine/terminal'
-import { ClaudeInfoService, INFO_ARGS, parseCommands } from '../src/main/engine/claude-info'
+import { ClaudeInfoService, INFO_ARGS, parseAgents, parseCommands } from '../src/main/engine/claude-info'
 import type { ChildLike } from '../src/main/engine/transport'
 import { listProjectFiles } from '../src/main/project-files'
-import { applyCompletion, hideAnsweredCommands, commandTokenLength, completionAt, fileMention, filterCommands, isClearCommand, matchesCommandName, mcpCommandOf, appCommandOf, nthLatestReply, mcpProblems, rankFiles } from '../src/renderer/lib'
+import { agentMention, agentOptions, keywordRanges, sendsAsTyped, applyCompletion, hideAnsweredCommands, commandTokenLength, commandTokenRanges, completionAt, midMessageCommands, rankMentions, fileMention, filterCommands, isClearCommand, matchesCommandName, mcpCommandOf, appCommandOf, nthLatestReply, mcpProblems, rankFiles, sideQuestionOf, renameCommandOf, addDirCommandOf, terminalOnlyCommand, isForkCommand, isRewindCommand } from '../src/renderer/lib'
 import type { ClaudeCommand, McpServerStatus } from '../src/shared/claude-info-types'
 
 class FakeProcess extends EventEmitter {
@@ -164,6 +164,19 @@ describe('asking Claude Code what it has', () => {
     expect(commands[5]!.argumentHint).toBe('<instructions>')
   })
 
+  it('reads the agents from the initialize answer', () => {
+    expect(parseAgents([
+      { name: 'Explore', description: 'Read-only search agent', model: 'haiku' },
+      { name: 'statusline-setup' },
+      { description: 'nameless' },
+      'junk'
+    ])).toEqual([
+      { type: 'Explore', description: 'Read-only search agent' },
+      { type: 'statusline-setup', description: '' }
+    ])
+    expect(parseAgents(undefined)).toEqual([])
+  })
+
   class FakeChild extends EventEmitter {
     stdout = new EventEmitter()
     stderr = new EventEmitter()
@@ -196,7 +209,7 @@ describe('asking Claude Code what it has', () => {
     child.stdout.emit('data', JSON.stringify({ type: 'system', subtype: 'hook_started' }) + '\n')
     child.stdout.emit('data', JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id, response } }) + '\n')
   }
-  const answer = (child: FakeChild): void => reply(child, { commands: [{ name: 'a', description: 'A (user)' }], claude_code_version: '2.1.316' })
+  const answer = (child: FakeChild): void => reply(child, { commands: [{ name: 'a', description: 'A (user)' }], agents: [{ name: 'Explore', description: 'Search' }], claude_code_version: '2.1.316' })
 
   it('sends no message, closes the process when answered, and never starts MCP servers', async () => {
     const { svc, children, calls } = service()
@@ -207,6 +220,7 @@ describe('asking Claude Code what it has', () => {
     expect(info.commands[0]!.name).toBe('a')
     expect(info.commands.map(c => c.name)).toEqual(expect.arrayContaining(['memory', 'status', 'add-dir', 'rewind']))
     expect(info.version).toBe('2.1.316')
+    expect(info.agents).toEqual([{ type: 'Explore', description: 'Search' }])
     expect(children[0]!.ended).toBe(true)
     expect(calls[0]!.args).toBe(INFO_ARGS)
     expect(INFO_ARGS).toEqual(expect.arrayContaining(['--no-session-persistence', '--strict-mcp-config']))
@@ -327,7 +341,8 @@ describe('composer completion', () => {
     expect(completionAt('/com', 4)).toMatchObject({ kind: 'command', query: 'com' })
     expect(completionAt('/compact now', 12)).toBeNull()
     expect(completionAt('/usr/bin', 8)).toBeNull()
-    expect(completionAt('run /compact', 12)).toBeNull()
+    // Mid-message, a / after a space is a mention: see 'mid-message triggers'.
+    expect(completionAt('run /compact', 12)).toMatchObject({ kind: 'command', mid: true })
     expect(completionAt('@', 1)).toMatchObject({ kind: 'file', query: '', start: 0 })
     expect(completionAt('read @src/ma', 12)).toMatchObject({ kind: 'file', query: 'src/ma', start: 5 })
     expect(completionAt('read @"my di', 12)).toMatchObject({ kind: 'file', query: 'my di', start: 5 })
@@ -387,6 +402,140 @@ describe('composer completion', () => {
   it('recognises /clear and its aliases', () => {
     for (const t of ['/clear', ' /CLEAR ', '/new', '/reset']) expect(isClearCommand(t)).toBe(true)
     for (const t of ['/clearly', 'please /clear', '/compact']) expect(isClearCommand(t)).toBe(false)
+  })
+})
+
+describe('mid-message triggers', () => {
+  it('opens the / menu after whitespace or CJK punctuation, with the caret in the token', () => {
+    expect(completionAt('please /', 8)).toEqual({ kind: 'command', query: '', start: 7, end: 8, mid: true })
+    expect(completionAt('please /pro', 11)).toEqual({ kind: 'command', query: 'pro', start: 7, end: 11, mid: true })
+    expect(completionAt('a\n/x', 4)).toMatchObject({ kind: 'command', query: 'x', start: 2, mid: true })
+    expect(completionAt('。/x', 3)).toMatchObject({ kind: 'command', query: 'x', start: 1, mid: true })
+    // The caret inside the token: the whole token is replaced.
+    expect(completionAt('run /probe-hi now', 7)).toEqual({ kind: 'command', query: 'pr', start: 4, end: 13, mid: true })
+    // Not glued to a word, not a path, not past the token.
+    expect(completionAt('and/or', 6)).toBeNull()
+    expect(completionAt('see /usr/bin', 12)).toBeNull()
+    expect(completionAt('run /x y', 8)).toBeNull()
+  })
+
+  it('leaves the menu at the start of a message as it was', () => {
+    expect(completionAt('/', 1)).toEqual({ kind: 'command', query: '', start: 0, end: 1 })
+    expect(completionAt('/com', 4)).toEqual({ kind: 'command', query: 'com', start: 0, end: 4 })
+  })
+
+  it('stays off in a ! shell command', () => {
+    expect(completionAt('!ls /tm', 7)).toBeNull()
+    expect(completionAt('  !grep -r x /us', 16)).toBeNull()
+  })
+
+  it('stays off when the message starts with a command that takes paths or names', () => {
+    for (const lead of ['/add-dir', '/cd', '/resume', '/plugin', '/plugins', '/marketplace']) {
+      const text = `${lead} /x`
+      expect(completionAt(text, text.length)).toBeNull()
+    }
+    expect(completionAt('/compact /x', 11)).toMatchObject({ kind: 'command', mid: true, query: 'x' })
+  })
+
+  it('offers only skills and prompt commands mid-message', () => {
+    const all = [
+      cmd('compact'), cmd('doctor'), cmd('probe-hi', 'project'), cmd('build', 'user'),
+      cmd('superpowers:brainstorming', 'plugin'), cmd('docx', 'synced'), cmd('mcp__rea__trace', 'mcp'), cmd('btw')
+    ]
+    expect(midMessageCommands(all, null).map(c => c.name)).toEqual(['probe-hi', 'build', 'superpowers:brainstorming', 'docx'])
+    // A bundled skill comes as a built-in: the chat's init says it's a skill.
+    expect(midMessageCommands(all, ['doctor', 'probe-hi']).map(c => c.name)).toEqual(['doctor', 'probe-hi', 'build', 'superpowers:brainstorming', 'docx'])
+  })
+
+  it('inserts /name and a space in place of the typed token', () => {
+    const text = 'please /pro and then'
+    const at = completionAt(text, 11)!
+    expect(applyCompletion(text, at, '/probe-hi')).toEqual({ text: 'please /probe-hi and then', caret: 17 })
+    expect(applyCompletion('please /', completionAt('please /', 8)!, '/probe-hi')).toEqual({ text: 'please /probe-hi ', caret: 17 })
+  })
+
+  it('never handles a message that starts with text as one of the app commands', () => {
+    for (const name of ['clear', 'btw why', 'rename x', 'add-dir docs', 'mcp', 'login', 'fork', 'rewind', 'plan it', 'theme', 'probe-hi']) {
+      const text = `please /${name}`
+      expect(appCommandOf(text)).toBeNull()
+      expect(isClearCommand(text)).toBe(false)
+      expect(sideQuestionOf(text)).toBeNull()
+      expect(renameCommandOf(text)).toBeNull()
+      expect(addDirCommandOf(text)).toBeNull()
+      expect(mcpCommandOf(text)).toBeNull()
+      expect(terminalOnlyCommand(text)).toBeNull()
+      expect(isForkCommand(text)).toBe(false)
+      expect(isRewindCommand(text)).toBe(false)
+    }
+  })
+
+  it('highlights known commands anywhere in the message', () => {
+    const known = [cmd('compact'), cmd('probe-hi', 'project'), cmd('superpowers:brainstorming', 'plugin', '', ['brainstorming'])]
+    expect(commandTokenRanges('/compact then /probe-hi.', known)).toEqual([{ start: 0, end: 8 }, { start: 14, end: 23 }])
+    expect(commandTokenRanges('use /brainstorming and /nope or a/probe-hi', known)).toEqual([{ start: 4, end: 18 }])
+    expect(commandTokenRanges('。/compact', known)).toEqual([{ start: 1, end: 9 }])
+    expect(commandTokenRanges('/clear', [])).toEqual([{ start: 0, end: 6 }])
+    expect(commandTokenRanges('nothing here', known)).toEqual([])
+  })
+})
+
+describe('the ultracode keyword', () => {
+  const at = (text: string): string[] => keywordRanges(text, 'ultracode').map(r => text.slice(r.start, r.end))
+
+  it('finds it as Claude Code does', () => {
+    expect(at('please ultracode this')).toEqual(['ultracode'])
+    expect(at('ULTRACODE. Then stop')).toEqual(['ULTRACODE'])
+    expect(keywordRanges('do it ultracode', 'ultracode')).toEqual([{ start: 6, end: 15 }])
+  })
+
+  it('skips it in quotes, backticks, brackets and tags, next to / \ -, and in a leading command', () => {
+    for (const text of ['say "ultracode" here', 'the `ultracode` word', "it's 'ultracode' now", '(ultracode)', '[a [ultracode]', '<ultracode> x',
+      'src/ultracode', 'ultracode/x', 'pre-ultracode', 'ultracode-ish', 'ultracode?', 'ultracode.ts', '/compact ultracode', 'ultracoder']) {
+      expect(at(text)).toEqual([])
+    }
+    // An apostrophe inside a word doesn't open a quote.
+    expect(at("don't ultracode")).toEqual(['ultracode'])
+  })
+
+  it('sends a message whose only live ultracode was pasted without the typed mark', () => {
+    const chip = (text: string) => ({ id: 'p', text, lineCount: 30 })
+    expect(sendsAsTyped('look at this', [chip('a log line saying ultracode\n...')])).toBe(false)
+    expect(sendsAsTyped('ultracode: look at this', [chip('ultracode again')])).toBe(true)
+    expect(sendsAsTyped('look at "ultracode"', [chip('ultracode')])).toBe(false)
+    expect(sendsAsTyped('look at this', [chip('`ultracode` in backticks')])).toBe(true)
+    expect(sendsAsTyped('nothing pasted, ultracode', [])).toBe(true)
+    expect(sendsAsTyped('look at this', [chip('just a log')])).toBe(true)
+  })
+})
+
+describe('agents in the @ menu', () => {
+  const info = [{ type: 'Explore', description: 'Read-only search' }, { type: 'Plan', description: 'Plans' }]
+
+  it('takes the names from the chat init and the descriptions from Claude Code', () => {
+    expect(agentOptions(['claude', 'Explore'], info)).toEqual([{ type: 'claude', description: '' }, { type: 'Explore', description: 'Read-only search' }])
+    expect(agentOptions(null, info)).toEqual(info)
+  })
+
+  it('inserts @agent-<type>, and leaves out a type with a space, which Claude Code cannot read', () => {
+    expect(agentMention('Explore')).toBe('@agent-Explore')
+    expect(agentOptions(['code reviewer', 'Plan'], info)).toEqual([{ type: 'Plan', description: 'Plans' }])
+    expect(agentOptions(null, [...info, { type: 'code reviewer', description: '' }])).toEqual(info)
+  })
+
+  it('lists agents with files: name matches first, other matches after the files', () => {
+    const files = ['src/plan.ts', 'README.md']
+    expect(rankMentions(files, info, 'pla')).toEqual([
+      { kind: 'agent', agent: info[1] },
+      { kind: 'file', path: 'src/plan.ts' }
+    ])
+    expect(rankMentions(files, info, 'xplor')).toEqual([{ kind: 'agent', agent: info[0] }])
+    expect(rankMentions(files, info, 'agent-ex')).toEqual([{ kind: 'agent', agent: info[0] }])
+    expect(rankMentions(files, info, '')).toEqual([
+      { kind: 'file', path: 'README.md' }, { kind: 'file', path: 'src/plan.ts' },
+      { kind: 'agent', agent: info[0] }, { kind: 'agent', agent: info[1] }
+    ])
+    // A path being typed is about files only.
+    expect(rankMentions(files, info, 'src/')).toEqual([{ kind: 'file', path: 'src/plan.ts' }])
   })
 })
 

@@ -5,6 +5,7 @@ import type { ContextUsage } from '../../shared/project-options'
 import type { SessionSummary } from '../../shared/types'
 import type { FsEntry } from '../../shared/ipc'
 import { costOfSession, formatCost } from '../../shared/models'
+import { PinIcon } from './PinBadge'
 
 /** Compact token count: 412000 -> "412k", 2_100_000 -> "2.1M". */
 function fmtTokens(n: number): string {
@@ -21,10 +22,6 @@ const CONTEXT_WARN_PERCENT = 80
 
 export type RailView = 'files' | 'pins'
 
-/** A pin, as an icon: the rail's way to its pinned messages. */
-function PinIcon() {
-  return <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M9.8 1.3a.8.8 0 0 1 1.1 0l3.8 3.8a.8.8 0 0 1 0 1.1l-.5.5a1.5 1.5 0 0 1-1.6.3l-2.3 2.7.2 2.3a.8.8 0 0 1-.2.6l-.6.6a.8.8 0 0 1-1.1 0L6.2 10.4l-3.7 3.7-.6-.6 3.7-3.7L3.2 7.4a.8.8 0 0 1 0-1.1l.6-.6a.8.8 0 0 1 .6-.2l2.3.2 2.7-2.3a1.5 1.5 0 0 1 .3-1.6z" /></svg>
-}
 
 /** One project's pinned messages. Clicking one goes to it, in whichever chat it's in. */
 function PinsList({ pins, openChatId, onJump, onUnpin }: { pins: PinnedMessage[]; openChatId: number | null; onJump: (pin: PinnedMessage) => void; onUnpin: (pin: PinnedMessage) => void }) {

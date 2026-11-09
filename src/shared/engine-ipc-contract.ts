@@ -235,7 +235,9 @@ export type EngineApi = {
   githubStatus(): Promise<GithubStatus>
   githubRepos(): Promise<GithubRepoList>
   githubPrepare(options: { repo: string; cwd: string }): Promise<PrepareRepoOutcome>
-  send(sessionPk: number, text: string, images?: EngineImageInput[], uuid?: string): void
+  /** `typed`: the user typed it. Claude Code is then told so, as the terminal tells it,
+   *  which is what makes a /skill mid-message reach Claude. Left off for what the app sends itself. */
+  send(sessionPk: number, text: string, images?: EngineImageInput[], uuid?: string, typed?: boolean): void
   /** Takes back a queued message. False if Claude already has it. */
   withdrawQueued(sessionPk: number, uuid: string): Promise<boolean>
   /** Makes Claude forget a message stopped before any reply. False if it couldn't. */

@@ -128,24 +128,28 @@ function unknownSessionEvent(): LiveEvent {
 }
 
 /** Builds the stream-json `user` turn sent over the transport's stdin.
- *  Text-only content stays a bare string (matches §2's simplest input
- *  shape); any images promote it to the block-array form with the text
- *  block first, mirroring the plan's recorded example verbatim. */
-function buildUserMessage(text: string, images?: ImageBlockInput[], before: ContentBlock[] = [], uuid?: string): object {
+ *  Text-only content stays a bare string. Anything else becomes blocks with the
+ *  typed text LAST: Claude Code reads @ mentions, /skill mentions and keywords such
+ *  as ultrathink from the last block only, so text before an image loses them.
+ *  `typed` marks what a person typed with `origin: {kind: 'human'}`, which the
+ *  terminal sets too. Headless only adds its hints for a mid-message /skill (and
+ *  for the ultracode keyword) when it's there. */
+export function buildUserMessage(text: string, images?: ImageBlockInput[], before: ContentBlock[] = [], uuid?: string, typed = false): object {
   const id = uuid === undefined ? {} : { uuid }
+  const origin = typed ? { origin: { kind: 'human' } } : {}
   if ((images === undefined || images.length === 0) && before.length === 0) {
-    return { type: 'user', ...id, message: { role: 'user', content: text } }
+    return { type: 'user', ...id, ...origin, message: { role: 'user', content: text } }
   }
   const blocks: ContentBlock[] = [
     ...before,
-    // Empty for `!` output going by itself, and an empty block would be refused.
-    ...(text.length > 0 ? [{ type: 'text', text } as ContentBlock] : []),
     ...(images ?? []).map((img): ContentBlock => ({
       type: 'image',
       source: { type: 'base64', media_type: img.mediaType, data: img.dataBase64 }
-    }))
+    })),
+    // Empty for `!` output going by itself, and an empty block would be refused.
+    ...(text.length > 0 ? [{ type: 'text', text } as ContentBlock] : [])
   ]
-  return { type: 'user', ...id, message: { role: 'user', content: blocks } }
+  return { type: 'user', ...id, ...origin, message: { role: 'user', content: blocks } }
 }
 
 /** Builds the SpawnSpec for one turn against an already-resolved session.
@@ -253,8 +257,9 @@ export class EngineCoordinator {
    *  reference, race with a prune) surfaces as an `unknown-session` event
    *  instead of throwing -- a bad IPC call from the renderer must never crash
    *  the main process. */
-  /** `uuid` names the message, so it can be followed in the queue and withdrawn. */
-  send(sessionPk: number, text: string, images?: ImageBlockInput[], uuid?: string): void {
+  /** `uuid` names the message, so it can be followed in the queue and withdrawn. `typed`
+   *  says a person typed it, as opposed to the app sending something by itself. */
+  send(sessionPk: number, text: string, images?: ImageBlockInput[], uuid?: string, typed = false): void {
     const info = this.deps.lookupSession(sessionPk)
     if (info === null) {
       this.emitEvent(sessionPk, unknownSessionEvent())
@@ -281,7 +286,7 @@ export class EngineCoordinator {
     const before = text.trimStart().startsWith('/') ? [] : this.deps.contextForMessage?.(sessionPk) ?? []
     // `!` output that a message has already carried: nothing is left to say.
     if (text.length === 0 && before.length === 0 && (images === undefined || images.length === 0)) return
-    const userMessage = buildUserMessage(text, images, before, uuid)
+    const userMessage = buildUserMessage(text, images, before, uuid, typed)
     if (text.length === 0) this.emitEvent(sessionPk, { kind: 'other', type: SHELL_OUTPUT_SENT })
     this.deps.pool.send(info.sessionKey, spec, userMessage)
   }

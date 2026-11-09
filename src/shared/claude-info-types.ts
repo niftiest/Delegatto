@@ -26,8 +26,16 @@ export type ClaudeModel = {
   efforts: string[]
 }
 
+/** A subagent Claude can be asked to use, as `@agent-<type>`. */
+export type ClaudeAgent = {
+  type: string
+  /** When to use it, as the agent's file says. */
+  description: string
+}
+
 export type ClaudeInfo = {
   commands: ClaudeCommand[]
+  agents: ClaudeAgent[]
   models: ClaudeModel[]
   version: string | null
   fetchedAt: number

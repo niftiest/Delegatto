@@ -12,6 +12,9 @@ import type { Elicitation, ElicitationAnswer } from '../../shared/engine-types'
 import { ElicitationCard, QuestionCard } from './QuestionCard'
 import { PlanApprovalCard } from './PlanApprovalCard'
 import { groupToolRuns, toolRunSummary, thoughtRuns, thoughtsLabel, stableItemKeys, groupIntoTurns, hideAnsweredCommands,userMessageParts, shouldScrollToBottom, followAfterScroll, isPlanApproval, isQuestion, formatClock, localDayKey, dayDividerLabel, type LivePreview } from '../lib'
+import { PinBadge, PinnedMessages } from './PinBadge'
+
+const NO_PINS: ReadonlySet<string> = new Set()
 
 type ResolvePermission = (id: string, decision: 'allow' | 'allow_always' | 'allow_folder' | 'deny', editedInput?: unknown, denyMessage?: string) => void
 
@@ -23,7 +26,7 @@ const CARD_OPEN_MS = 400
 /** How far above the end the reader has to be before the jump button shows. */
 const JUMP_BUTTON_GAP = 200
 
-export function Transcript({ pendingToolIds, groupToolCalls = true, items: allItems, hasMore, loadingOlder, loading, onReachTop, permissionRequests, onResolvePermission, elicitations = [], onAnswerElicitation, onOpenLink, livePreview, liveThinking = null, sending = false, savedTextOnly = false, showToolCalls = true, showThinking = true, onAtBottomChange, fileMissing = false, claudeIcon = { kind: 'initials' }, scrollToBottomSignal, thinkingExpanded = false, toolCardsExpanded = false, jumpTo = null, onJumped }: {
+export function Transcript({ pendingToolIds, groupToolCalls = true, items: allItems, hasMore, loadingOlder, loading, onReachTop, permissionRequests, onResolvePermission, elicitations = [], onAnswerElicitation, onOpenLink, livePreview, liveThinking = null, sending = false, savedTextOnly = false, showToolCalls = true, showThinking = true, onAtBottomChange, fileMissing = false, claudeIcon = { kind: 'initials' }, scrollToBottomSignal, thinkingExpanded = false, toolCardsExpanded = false, jumpTo = null, onJumped, pinnedUuids = NO_PINS }: {
   items: RenderItem[]
   hasMore: boolean
   loadingOlder: boolean
@@ -78,6 +81,8 @@ export function Transcript({ pendingToolIds, groupToolCalls = true, items: allIt
   /** A message to scroll to and flash, once it's among `items`. */
   jumpTo?: string | null
   onJumped?: () => void
+  /** The chat's pinned messages: each gets a small pin at its top right. */
+  pinnedUuids?: ReadonlySet<string>
 }) {
   const pending = permissionRequests ?? []
   const preview = livePreview ?? null
@@ -276,6 +281,7 @@ export function Transcript({ pendingToolIds, groupToolCalls = true, items: allIt
   }
 
   return (
+    <PinnedMessages.Provider value={pinnedUuids}>
     <div className="stream" ref={parentRef} onScroll={handleScroll} onWheel={releaseJump} onMouseDown={releaseJump} onKeyDown={releaseJump}
       onClickCapture={e => { if ((e.target as Element).closest('summary') !== null) openedCardAt.current = Date.now() }}>
       <div className="stream-content" ref={contentRef}>
@@ -333,7 +339,7 @@ export function Transcript({ pendingToolIds, groupToolCalls = true, items: allIt
                       )}
                       {part.texts.map(li => {
                         const it = turn.items[li]!
-                        return it.kind === 'text' ? <div key={keyAt(li)} className="bubble-me txt" data-msg={it.uuid}><TextWithLinks text={it.text} /></div> : null
+                        return it.kind === 'text' ? <div key={keyAt(li)} className="bubble-me txt" data-msg={it.uuid}><PinBadge uuid={it.uuid} /><TextWithLinks text={it.text} /></div> : null
                       })}
                     </div>
                   ))}
@@ -367,7 +373,7 @@ export function Transcript({ pendingToolIds, groupToolCalls = true, items: allIt
                   }
                   const renderItem = (it: RenderItem, k: string): ReactNode => {
                     if (it.kind === 'text') return it.literal === true
-                      ? <pre key={k} className="bubble-claude shell-output" data-msg={it.uuid}>{it.text}</pre>
+                      ? <pre key={k} className="bubble-claude shell-output" data-msg={it.uuid}><PinBadge uuid={it.uuid} />{it.text}</pre>
                       : <Markdown key={k} text={it.text} className="bubble-claude" anchor={it.uuid} />
                     if (it.kind === 'tool') return <ToolCard key={k} item={it} defaultOpen={toolCardsExpanded} pending={pendingToolIds?.has(it.toolUseId) ?? false} />
                     if (it.kind === 'image') return <ChatImage key={k} source={it.source} />
@@ -458,6 +464,7 @@ export function Transcript({ pendingToolIds, groupToolCalls = true, items: allIt
         </div>
       )}
     </div>
+    </PinnedMessages.Provider>
   )
 }
 

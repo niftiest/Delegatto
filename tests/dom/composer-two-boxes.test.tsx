@@ -45,7 +45,7 @@ describe('one chat in two message boxes', () => {
     update({ running: false })
     await flush()
     expect(onSendB).toHaveBeenCalledTimes(1)
-    expect(onSendB).toHaveBeenCalledWith('/compact', [], [])
+    expect(onSendB).toHaveBeenCalledWith('/compact', [], [], undefined, true)
     expect(onSendA).not.toHaveBeenCalled()
     expect(composeStore.get(pk).queue).toEqual([])
   })
@@ -60,7 +60,7 @@ describe('one chat in two message boxes', () => {
     update({ running: false })
     await flush()
     expect(onSendA).toHaveBeenCalledTimes(1)
-    expect(onSendA).toHaveBeenCalledWith('/cost', [], [])
+    expect(onSendA).toHaveBeenCalledWith('/cost', [], [], undefined, true)
     expect(onSendB).not.toHaveBeenCalled()
   })
 

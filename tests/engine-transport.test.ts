@@ -259,7 +259,9 @@ describe('Transport — stdout framing and event emission', () => {
         sessionId: '7600a514-8300-4cef-b1c8-8b0cd8123e41',
         cwd: 'C:\\Users\\user\\.claude\\jobs\\f7ef5120\\tmp',
         model: 'claude-opus-5[1m]',
-        permissionMode: 'bypassPermissions'
+        permissionMode: 'bypassPermissions',
+        agents: ['claude'],
+        skills: ['build']
       },
       { kind: 'delta', text: 'o' },
       { kind: 'delta', text: 'k' },
@@ -313,7 +315,9 @@ describe('Transport — stdout framing and event emission', () => {
         sessionId: '7600a514-8300-4cef-b1c8-8b0cd8123e41',
         cwd: 'C:\\Users\\user\\.claude\\jobs\\f7ef5120\\tmp',
         model: 'claude-opus-5[1m]',
-        permissionMode: 'bypassPermissions'
+        permissionMode: 'bypassPermissions',
+        agents: ['claude'],
+        skills: ['build']
       },
       { kind: 'delta', text: 'o' }
     ])
@@ -334,7 +338,9 @@ describe('Transport — stdout framing and event emission', () => {
         sessionId: '7600a514-8300-4cef-b1c8-8b0cd8123e41',
         cwd: 'C:\\Users\\user\\.claude\\jobs\\f7ef5120\\tmp',
         model: 'claude-opus-5[1m]',
-        permissionMode: 'bypassPermissions'
+        permissionMode: 'bypassPermissions',
+        agents: ['claude'],
+        skills: ['build']
       }
     ])
   })

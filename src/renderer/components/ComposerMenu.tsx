@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { ClaudeCommand } from '../../shared/claude-info-types'
+import type { ClaudeInfo } from '../../shared/claude-info-types'
 
-/** Claude Code's commands for this folder, fetched the first time `active` is
- *  true (a process has to start to ask, so never just for opening a chat). */
-export function useClaudeCommands(active: boolean, cwd: string | null): ClaudeCommand[] | 'loading' | 'failed' {
-  const [commands, setCommands] = useState<ClaudeCommand[] | 'loading' | 'failed'>('loading')
+/** What Claude Code has for this folder (commands and agents), fetched the first time
+ *  `active` is true (a process has to start to ask, so never just for opening a chat). */
+export function useClaudeInfo(active: boolean, cwd: string | null): ClaudeInfo | 'loading' | 'failed' {
+  const [info, setInfo] = useState<ClaudeInfo | 'loading' | 'failed'>('loading')
   const asked = useRef(false)
   useEffect(() => {
     if (!active || asked.current) return
     asked.current = true
-    void api.claudeInfo(cwd).then(r => setCommands(r.ok ? r.info.commands : 'failed')).catch(() => setCommands('failed'))
+    void api.claudeInfo(cwd).then(r => setInfo(r.ok ? r.info : 'failed')).catch(() => setInfo('failed'))
   }, [active, cwd])
-  return commands
+  return info
 }
 
 /** The project's paths, fetched the first time `active` is true. */

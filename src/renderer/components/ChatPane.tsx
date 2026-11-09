@@ -150,6 +150,10 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
   const [projectSettings, setProjectSettings] = useState<ProjectSettings>({})
   const [shellRuns, setShellRuns] = useState<ShellRun[]>([])
   const [mcpServers, setMcpServers] = useState<McpServerStatus[] | null>(null)
+  // What the chat's process said it has, at the start of its last turn: agents for the
+  // @ menu, and which commands are skills for the / menu mid-message.
+  const [initAgents, setInitAgents] = useState<string[] | null>(null)
+  const [initSkills, setInitSkills] = useState<string[] | null>(null)
   const [items, setItems] = useState<RenderItem[]>([])
   const itemsRef = useRef(items)
   itemsRef.current = items
@@ -418,6 +422,8 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
       if (ev.kind === 'thinkingDelta') setLiveThinking(t => (t ?? '') + ev.text)
       else if (ev.kind === 'delta' || ev.kind === 'assistant' || clearsRunning(ev)) setLiveThinking(null)
       if (ev.kind === 'init' && ev.mcpServers !== undefined) setMcpServers(ev.mcpServers)
+      if (ev.kind === 'init' && ev.agents !== undefined) setInitAgents(ev.agents)
+      if (ev.kind === 'init' && ev.skills !== undefined) setInitSkills(ev.skills)
       if (ev.kind === 'exit') setMcpServers(null)
       if (ev.kind === 'usage') setTurnTokens(n => n + ev.outputTokens)
       if (ev.kind === 'suggestion') setSuggestion(ev.text)
@@ -492,6 +498,10 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
     let alive = true
     void api.backgroundTasks(sessionPk).then(t => { if (alive) setBackgroundTasks(t) })
     return () => { alive = false }
+  }, [sessionPk])
+  useEffect(() => {
+    setInitAgents(null)
+    setInitSkills(null)
   }, [sessionPk])
   useEffect(() => {
     setMcpServers(null)
@@ -731,7 +741,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
   const forkChatRef = useRef(forkChat)
   forkChatRef.current = forkChat
 
-  const onSendRef = useRef<(text: string, images: ComposerImage[], pastedTexts: PastedTextChip[], uuid?: string) => void>(() => {})
+  const onSendRef = useRef<(text: string, images: ComposerImage[], pastedTexts: PastedTextChip[], uuid?: string, typed?: boolean) => void>(() => {})
   const checkingSyncRef = useRef(new Map<number, { text: string; images: ComposerImage[]; cancelled: boolean }>())
 
   /** `/mcp`, as the terminal does it: the servers, or reconnect / turn on / turn off right away.
@@ -762,9 +772,13 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
   /** Terminal commands Delegatto answers itself (see appCommandOf), with the screen or
    *  action that does the same job here. Called through a ref: onSend is memoized, and
    *  this reads the chat's current state. */
-  const runAppCommandRef = useRef<(pk: number, cmd: AppCommand) => void>(() => {})
-  runAppCommandRef.current = (pk: number, cmd: AppCommand): void => {
-    const say = (text: string, good = true): void => { if (good) setGoodNotice(text); setTerminalNotice(text) }
+  const runAppCommandRef = useRef<(pk: number, cmd: AppCommand, images?: ComposerImage[]) => void>(() => {})
+  runAppCommandRef.current = (pk: number, cmd: AppCommand, images: ComposerImage[] = []): void => {
+    // Only /plan with a description sends anything on, so it's the one that takes pictures along.
+    const dropped = images.length > 0 && !(cmd.kind === 'plan' && cmd.text !== '')
+    const unsent = dropped ? ` ${images.length === 1 ? 'The picture with it wasn’t' : 'The pictures with it weren’t'} sent: this command runs in Delegatto.` : ''
+    const say = (text: string, good = true): void => { if (good) setGoodNotice(text + unsent); setTerminalNotice(text + unsent) }
+    if (dropped) setTerminalNotice(unsent.trim())
     switch (cmd.kind) {
       case 'settings': app.openSettings(cmd.section); return
       case 'memory': app.openMemory(project); return
@@ -781,7 +795,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
       case 'plan':
         setChatMode('plan')
         void api.setChatMode(pk, 'plan').then(() => {
-          if (cmd.text !== '') onSendRef.current(cmd.text, [], [])
+          if (cmd.text !== '') onSendRef.current(cmd.text, images, [], undefined, true)
           else say('Plan mode is on: Claude plans before making changes, and its plan shows in the chat for you to approve.')
         })
         return
@@ -856,7 +870,9 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
     }
   }
 
-  const onSend = useCallback((text: string, images: ComposerImage[], pastedTexts: PastedTextChip[], uuid?: string) => {
+  // `typed`: the user typed it, so Claude Code is told a person wrote it. Only the paths that
+  // send the user's own words pass true; anything the app sends by itself leaves it off.
+  const onSend = useCallback((text: string, images: ComposerImage[], pastedTexts: PastedTextChip[], uuid?: string, typed = false) => {
     // A synced chat: make sure this PC isn't behind before spending a turn. It only
     // asks GitHub if the last check is a few minutes old, and a chat that isn't
     // synced goes straight through.
@@ -874,7 +890,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
           if (pending.cancelled) return
           checkingSyncRef.current.delete(pk)
           syncChat.bypass.current = true
-          onSendRef.current(text, images, pastedTexts, uuid)
+          onSendRef.current(text, images, pastedTexts, uuid, typed)
           syncChat.bypass.current = false
         }
         if (info.conflict !== null) {
@@ -886,7 +902,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
         if (pending.cancelled) return
         checkingSyncRef.current.delete(pk)
         syncChat.bypass.current = true
-        onSendRef.current(text, images, pastedTexts, uuid)
+        onSendRef.current(text, images, pastedTexts, uuid, typed)
         syncChat.bypass.current = false
       })
       return
@@ -921,7 +937,9 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
     const mcp = mcpCommandOf(combined)
     if (mcp !== null) { void runMcpCommand(session.id, mcp); return }
     const appCommand = appCommandOf(combined)
-    if (appCommand !== null && images.length === 0) { runAppCommandRef.current(session.id, appCommand); return }
+    // Handled here with or without pictures: with the text block last, Claude Code would
+    // otherwise run the command itself and drop them.
+    if (appCommand !== null) { runAppCommandRef.current(session.id, appCommand, images); return }
     if (isForkCommand(combined)) { forkChatRef.current(); return }
     if (isRewindCommand(combined)) {
       if (runningRef.current) setTerminalNotice('Claude is still replying here. Press Esc to stop it, then rewind.')
@@ -939,7 +957,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
     // Signing in is done here, without a terminal.
     if (command === '/login') { app.signIn('asked'); return }
     if (command !== null && !bypassTerminalCheck.current) {
-      setTerminalPrompt({ command, text: combined, images })
+      setTerminalPrompt({ command, text: combined, images, typed })
       return
     }
     bypassTerminalCheck.current = false
@@ -962,14 +980,14 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
     composeStore.noteSent(session.id, combined, images, uuid, ownId)
     // A message for Claude's next step shows in the queue instead.
     if (uuid === undefined) markSending(session.id, true)
-    api.send(session.id, combined, images.map(({ mediaType, dataBase64 }) => ({ mediaType, dataBase64 })), uuid ?? ownId)
+    api.send(session.id, combined, images.map(({ mediaType, dataBase64 }) => ({ mediaType, dataBase64 })), uuid ?? ownId, typed)
   }, [session, syncChat.info.synced, markSending]) // eslint-disable-line react-hooks/exhaustive-deps
   onSendRef.current = onSend
 
   // "Open in terminal" (header button, or the prompt for terminal-only
   // commands): hands the chat to the interactive Claude Code; the lock monitor
   // then keeps it read-only here until that terminal exits.
-  const [terminalPrompt, setTerminalPrompt] = useState<{ command: string; text: string; images: ComposerImage[] } | null>(null)
+  const [terminalPrompt, setTerminalPrompt] = useState<{ command: string; text: string; images: ComposerImage[]; typed: boolean } | null>(null)
   const [terminalNotice, setTerminalNotice] = useState<string | null>(null)
   /** The notice that's good news, so it doesn't read as an error. */
   const [goodNotice, setGoodNotice] = useState<string | null>(null)
@@ -1065,7 +1083,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
             }
           }}
           onUnpin={pin => { void api.unpinMessage(pin.sessionPk, pin.uuid).then(rail.refreshPins) }}
-          onCompact={!running && externalLock === null ? () => onSend('/compact', [], []) : undefined} />
+          onCompact={!running && externalLock === null ? () => onSend('/compact', [], [], undefined, false) : undefined} />
       : <ContextRailStrip fsEntries={rail.fsEntries} view={rail.view} pinCount={rail.pins.length} onExpand={() => toggleFiles(true)}
           onOpenView={v => { rail.setView(v); toggleFiles(true) }} />
   )
@@ -1152,7 +1170,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
           <div style={{ display: findTerms === '' ? 'contents' : 'none' }}><Transcript key={`transcript-${session.id}`} items={stale ? NO_ITEMS : items} hasMore={hasMore && !stale} loadingOlder={loadingOlder && !stale}
               loading={sessionLoading || stale} onReachTop={loadOlder} livePreview={stale ? null : livePreview} liveThinking={showThinking ? liveThinking : null} showThinking={showThinking} sending={sendingPks.has(session.id)} savedTextOnly={savedTextOnly}
               showToolCalls={toolDisplay !== 'hidden'} groupToolCalls={toolDisplay === 'grouped'} fileMissing={transcriptFileMissing}
-              claudeIcon={settings?.claudeIcon ?? { kind: 'initials' }}
+              claudeIcon={settings?.claudeIcon ?? { kind: 'initials' }} pinnedUuids={rail.pinnedUuids}
               thinkingExpanded={settings?.thinkingExpanded ?? false}
               toolCardsExpanded={settings?.toolCardsExpanded ?? false}
               pendingToolIds={pendingToolIds}
@@ -1191,7 +1209,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
                 <span><code>{terminalPrompt.command}</code> only works in Claude Code's terminal. Open this chat there? It continues right where it is, and Delegatto shows its replies.</span>
                 <span className="term-prompt-actions">
                   <button type="button" className="btn-primary" onClick={openChatInTerminal}>Open in terminal</button>
-                  <button type="button" className="btn-secondary" onClick={() => { bypassTerminalCheck.current = true; onSend(terminalPrompt.text, terminalPrompt.images, []) }}>Send anyway</button>
+                  <button type="button" className="btn-secondary" onClick={() => { bypassTerminalCheck.current = true; onSend(terminalPrompt.text, terminalPrompt.images, [], undefined, terminalPrompt.typed) }}>Send anyway</button>
                   <button type="button" className="term-prompt-x" aria-label="Dismiss" onClick={() => setTerminalPrompt(null)}>✕</button>
                 </span>
               </>
@@ -1255,6 +1273,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
           // session into another. What's in progress survives the switch: text
           // via draftsRef, chips and the queue in composeStore.
           <Composer key={`composer-${session.id}`} sessionPk={session.id} running={running && !stale} focused={focused} settled={settledPk === session.id} shellStops={shellStops} onCycleMode={() => { const next = nextPermissionMode(chatMode); changeChatMode(next); return permissionModeLabel(next) }} lock={externalLock} syncing={syncingIn} cwd={project.cwd ?? null} suggestion={suggestion}
+            agents={initAgents} skills={initSkills}
             onShellCommand={command => { void api.shellRun(session.id, command) }}
             onHijack={async () => {
               const r = await api.hijackChat(session.id)

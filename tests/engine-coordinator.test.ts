@@ -253,7 +253,7 @@ describe('EngineCoordinator — send() SpawnSpec construction', () => {
     expect(pool.sent[0]!.msg).toEqual({ type: 'user', message: { role: 'user', content: 'plain text' } })
   })
 
-  it('builds text + image content blocks when images are given', () => {
+  it('builds image + text content blocks when images are given, with the text last', () => {
     const { coordinator, pool } = makeCoordinator()
     coordinator.send(1, 'look at this', [{ mediaType: 'image/png', dataBase64: 'ZmFrZQ==' }])
 
@@ -262,11 +262,48 @@ describe('EngineCoordinator — send() SpawnSpec construction', () => {
       message: {
         role: 'user',
         content: [
-          { type: 'text', text: 'look at this' },
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'ZmFrZQ==' } }
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'ZmFrZQ==' } },
+          { type: 'text', text: 'look at this' }
         ]
       }
     })
+  })
+
+  // Claude Code reads @ mentions, /skill mentions and keywords from the last block only.
+  it('keeps the typed text as the last block behind ! output and several images', () => {
+    const before: ContentBlock[] = [{ type: 'text', text: '<bash-stdout>a</bash-stdout>' }]
+    const { coordinator, pool } = makeCoordinator({ contextForMessage: () => before })
+    coordinator.send(1, 'read @src/a.ts please', [
+      { mediaType: 'image/png', dataBase64: 'AA==' },
+      { mediaType: 'image/jpeg', dataBase64: 'BB==' }
+    ], undefined, true)
+
+    const content = (pool.sent[0]!.msg as { message: { content: ContentBlock[] } }).message.content
+    expect(content.map(b => b.type)).toEqual(['text', 'image', 'image', 'text'])
+    expect(content[0]).toEqual(before[0])
+    expect(content.at(-1)).toEqual({ type: 'text', text: 'read @src/a.ts please' })
+  })
+
+  it('marks a message the user typed as human, as the terminal does', () => {
+    const { coordinator, pool } = makeCoordinator()
+    coordinator.send(1, 'say hi /probe-hi', undefined, 'u-1', true)
+    expect(pool.sent[0]!.msg).toEqual({
+      type: 'user', uuid: 'u-1', origin: { kind: 'human' }, message: { role: 'user', content: 'say hi /probe-hi' }
+    })
+  })
+
+  it('marks the typed frame human when images are attached too', () => {
+    const { coordinator, pool } = makeCoordinator()
+    coordinator.send(1, 'what is this', [{ mediaType: 'image/png', dataBase64: 'AA==' }], undefined, true)
+    expect(pool.sent[0]!.msg).toMatchObject({ type: 'user', origin: { kind: 'human' } })
+  })
+
+  it('leaves the origin off what the app sends by itself', () => {
+    const { coordinator, pool } = makeCoordinator({ contextForMessage: () => [{ type: 'text', text: '<bash-stdout>a</bash-stdout>' }] })
+    coordinator.send(1, 'a report from the other PC')
+    coordinator.deliverShellOutput(1)
+    expect(pool.sent).toHaveLength(2)
+    for (const s of pool.sent) expect(s.msg).not.toHaveProperty('origin')
   })
 
   it('an unknown sessionPk surfaces an error event instead of crashing', () => {

@@ -59,8 +59,15 @@ describe('parseEvent — init', () => {
       sessionId: '7600a514-8300-4cef-b1c8-8b0cd8123e41',
       cwd: 'C:\\Users\\user\\.claude\\jobs\\f7ef5120\\tmp',
       model: 'claude-opus-5[1m]',
-      permissionMode: 'bypassPermissions'
+      permissionMode: 'bypassPermissions',
+      agents: ['claude'],
+      skills: ['build']
     })
+  })
+
+  it('keeps the agents and skills lists only when they are lists of names', () => {
+    const line = '{"type":"system","subtype":"init","session_id":"s1","cwd":"/tmp","model":"opus","permissionMode":"default","agents":["Explore",7,"Plan"],"skills":"nope"}'
+    expect(parseEvent(line)).toEqual({ kind: 'init', sessionId: 's1', cwd: '/tmp', model: 'opus', permissionMode: 'default', agents: ['Explore', 'Plan'] })
   })
 
   it('falls back to kind:other when session_id is missing', () => {
