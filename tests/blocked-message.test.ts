@@ -72,7 +72,7 @@ describe('a message that ends before reaching Claude', () => {
 
   it('keeps every chat apart, and holds what happens in one not on screen', () => {
     const { store, event } = setup()
-    store.setOpen(2)
+    store.markOpen(2)
     store.noteSent(1, 'in chat one', [])
     store.noteSent(2, 'in chat two', [])
     event(BLOCKED, 1)

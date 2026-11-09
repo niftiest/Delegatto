@@ -84,6 +84,10 @@ export type SyncDeps = {
   isChatOpen(sessionId: string): boolean
   isExternallyLive(sessionId: string): boolean
   stopChat(sessionId: string): void
+  /** The process id of this app's Claude process for the chat, if it has one. */
+  chatPid?(sessionId: string): number | null
+  /** Whether a process is still running. */
+  processAlive?(pid: number): boolean
   afterLocalChange(): Promise<void>
   sessionPkOf(filePath: string): number | null
   /** Delegatto lists a chat under its first message, so a chat renamed by a row needs telling. */
@@ -275,7 +279,8 @@ export class SyncService {
   private presenceShas = new Map<string, string>()
   private presenceSentAt = 0
   private presenceSent = ''
-  private openChat: string | null = null
+  /** Every chat shown in a window on this PC. */
+  private openChats: string[] = []
   private github: GithubState = { state: 'missing', account: null }
   private discovered: string[] = []
   /** GitHub repos with synced chats, from the headers of the sync repos found above. */
@@ -334,13 +339,20 @@ export class SyncService {
 
   /** One sync job at a time: they share one local copy of the repo. */
   private enqueue<T>(label: string, job: () => Promise<T>): Promise<T> {
+    // The once-a-minute check is only logged when it's slow, or it would fill the log.
+    const routine = label === 'Checking for changes'
+    const queuedAt = this.now()
+    if (!routine) console.log(`[sync] queued: ${label}${this.busyCount > 0 ? ` (behind: ${this.activity})` : ''}`)
     const run = async (): Promise<T> => {
       this.busyCount++
       this.activity = label
       this.deps.onChange()
+      const startedAt = this.now()
       try {
         return await job()
       } finally {
+        const took = this.now() - startedAt
+        if (!routine || took > 30_000) console.log(`[sync] done: ${label} in ${Math.round(took / 1000)}s, after waiting ${Math.round((startedAt - queuedAt) / 1000)}s`)
         this.busyCount--
         if (this.busyCount === 0) this.activity = null
         this.deps.onChange()
@@ -359,6 +371,7 @@ export class SyncService {
         return { ok: true as const }
       } catch (e) {
         this.lastError = errorText(e)
+        console.warn(`[sync] ${label} failed: ${this.lastError}`)
         return { ok: false as const, error: this.lastError }
       }
     })
@@ -652,6 +665,11 @@ export class SyncService {
   /** A function turning another PC's paths into this one's. */
   private translator(origin: Origin, root: string): (line: string) => string {
     const rewriters: PathRewriter[] = []
+    // Claude keeps a project's own data (its memory, for one) in a folder named after the
+    // project's folder, so that name changes along with it. It goes first: it's the longer path.
+    if (!isSamePath(origin.root, root)) {
+      rewriters.push(new PathRewriter(join(origin.claudeDir, 'projects', encodePath(origin.root)), join(this.deps.paths.claudeDir, 'projects', encodePath(root))))
+    }
     if (!isSamePath(origin.root, root)) rewriters.push(new PathRewriter(origin.root, root, origin.siblings))
     if (!isSamePath(origin.claudeDir, this.deps.paths.claudeDir)) rewriters.push(new PathRewriter(origin.claudeDir, this.deps.paths.claudeDir))
     if (rewriters.length === 0) return line => line
@@ -779,6 +797,7 @@ export class SyncService {
   projectDeleted(workingDir: string): Promise<SyncResult> {
     return this.guarded('Stopping sync for a deleted project', async () => {
       const p = Object.values(this.state.projects).find(x => isSamePath(x.root, normalizePath(workingDir)))
+      console.log(`[sync] project deleted here: ${workingDir} -> ${p === undefined ? `not synced (synced: ${Object.values(this.state.projects).map(x => x.root).join(', ') || 'none'})` : `stops syncing ${p.projectId}`}`)
       if (p === undefined) return
       this.forgetProject(p.projectId)
       if (this.git !== null) await this.applySparse()
@@ -1018,7 +1037,9 @@ export class SyncService {
         await this.checkOnce()
         this.lastError = null
       } catch (e) {
-        this.lastError = errorText(e)
+        const text = errorText(e)
+        if (text !== this.lastError) console.warn(`[sync] check failed: ${text}`)
+        this.lastError = text
       }
     })
   }
@@ -1091,7 +1112,8 @@ export class SyncService {
    *  chat reloads with its new messages rather than without them. */
   private async finishIncoming(): Promise<void> {
     if (this.incoming.size === 0) return
-    await this.refreshCatalogue().catch(() => {})
+    console.log(`[sync] messages came in for ${[...this.incoming.values()].map(i => `${i.sessionId.slice(0, 8)} (${i.phase} ${i.done}/${i.total})`).join(", ")}; re-indexing`)
+    await this.refreshCatalogue().catch(err => console.warn(`[sync] re-indexing after incoming failed: ${errorText(err)}`))
     this.incoming.clear()
     this.sendIncoming(true)
   }
@@ -1373,9 +1395,13 @@ export class SyncService {
   private async closeForChange(sessionId: string): Promise<boolean> {
     if (this.deps.isExternallyLive(sessionId)) return false
     if (!this.deps.isChatOpen(sessionId)) return true
+    // The app lets go of a process the moment it's asked to stop, but the process itself
+    // goes on a little longer, and writes where it left off as it closes. Writing before that
+    // would leave its note after the new messages, pointing back past them.
+    const pid = this.deps.chatPid?.(sessionId) ?? null
     this.deps.stopChat(sessionId)
     const deadline = this.now() + CLOSE_WAIT_MS
-    while (this.deps.isChatOpen(sessionId)) {
+    while (this.deps.isChatOpen(sessionId) || (pid !== null && (this.deps.processAlive?.(pid) ?? false))) {
       if (this.now() > deadline) return false
       await this.sleep(150)
     }
@@ -1673,13 +1699,14 @@ export class SyncService {
 
   // ---------------------------------------------------------------- presence
 
-  chatOpened(sessionId: string | null): void {
-    this.openChat = sessionId
+  /** The chats shown in any window here, which can be several. */
+  chatsOpened(sessionIds: string[]): void {
+    this.openChats = [...new Set(sessionIds.filter(id => typeof id === 'string' && id !== ''))]
     if (this.state.repo !== null) void this.enqueue('Updating this PC’s status', () => this.publishPresence(false)).catch(() => {})
   }
 
   private presenceBody(): PresenceBody {
-    return { name: this.deviceName, hostname: this.deps.hostname, at: this.now(), openChats: this.openChat === null ? [] : [this.openChat] }
+    return { name: this.deviceName, hostname: this.deps.hostname, at: this.now(), openChats: [...this.openChats] }
   }
 
   private async publishPresence(force: boolean): Promise<void> {
@@ -1687,7 +1714,7 @@ export class SyncService {
     const body = this.presenceBody()
     const fingerprint = JSON.stringify({ ...body, at: 0 })
     const due = this.now() - this.presenceSentAt >= PRESENCE_EVERY_MS
-    if (!force && fingerprint === this.presenceSent && !(due && this.openChat !== null)) return
+    if (!force && fingerprint === this.presenceSent && !(due && this.openChats.length > 0)) return
     const packed = await this.codec.packJson(body, `presence/${this.state.deviceId}`)
     await this.git.writePresence(this.state.deviceId, packed.toString('base64'))
     this.presenceSent = fingerprint

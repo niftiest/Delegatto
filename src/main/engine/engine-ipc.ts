@@ -1,7 +1,8 @@
 import { listPins, pinMessage, unpinMessage } from '../catalog/pins'
 import { markRewoundFrom } from './chat-actions'
 import { PlanUsageTracker } from './plan-usage'
-import { app, dialog, ipcMain, type BrowserWindow, shell } from 'electron'
+import { app, dialog, ipcMain, type BrowserWindow, type WebContents, shell } from 'electron'
+import type { WindowHub } from '../window-hub'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -11,6 +12,7 @@ import { getSettings, updateSettings } from '../catalog/settings'
 import { claudeHome } from '../indexer/discover'
 import { ENGINE_IPC, type RewindMode, type ClearChatOutcome, type EngineImageInput, type NewProjectOptions, type NewChatOutcome } from '../../shared/engine-ipc-contract'
 import { EngineCoordinator, type EngineDefaults, type RulesStore, type SessionInfo } from './coordinator'
+import { PendingQuestions } from './pending-questions'
 import { SessionPool } from './pool'
 import { findClaude, LIVE_DETAIL_FLAGS, supportsLiveDetail } from './find-claude'
 import { execFile } from 'node:child_process'
@@ -52,7 +54,7 @@ import {
   type ExportChatResult, type HookEntry, type HookScope, type HooksListing, type PanelResult, type PluginActionResult, type PluginsState, type WorkspaceDiff
 } from '../../shared/command-panels-types'
 import { BYPASS_ACCEPT_INDEX, BYPASS_QUESTION, bypassAccepted, recordBypassAccepted } from './bypass-consent'
-import type { AppDialogRequest } from '../../shared/app-dialog'
+import type { MainDialogRequest } from '../../shared/app-dialog'
 import type { ElicitationAnswer, LiveEvent, PermissionRequest } from '../../shared/engine-types'
 
 /** The electron boundary for Plan 2's write path (Task 6): constructs the
@@ -147,7 +149,7 @@ export type EngineHooks = {
   onEvent?: (sessionPk: number, e: LiveEvent) => void
   onPermission?: (sessionPk: number, req: PermissionRequest) => void
   /** Asks a question in the app's own window; resolves to the button chosen. */
-  ask?: (question: Omit<AppDialogRequest, 'id'>) => Promise<number>
+  ask?: (question: Omit<MainDialogRequest, 'id'>, from?: WebContents) => Promise<number>
 }
 
 export type EngineIpcHandle = {
@@ -183,7 +185,9 @@ const PLUGIN_CLI_TIMEOUT_MS = 60_000
 const PLUGIN_INSTALL_TIMEOUT_MS = 5 * 60_000
 
 
-export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: EngineHooks = {}): EngineIpcHandle {
+export function registerEngineIpc(db: Catalog, hub: WindowHub, hooks: EngineHooks = {}): EngineIpcHandle {
+  /** The window a request came from, for a native dialog's parent; else the main window. */
+  const windowOf = (sender: WebContents | undefined): BrowserWindow | null => (sender !== undefined ? hub.fromContents(sender) : null) ?? hub.main()
   // Read persisted settings once at startup for the engine
   // binary (Plan 3 Task 4/5). Per-new-chat defaults (model/effort/skip) are
   // read below into the coordinator's `defaults`; changing the
@@ -259,9 +263,11 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
   }
   const shellRunner = new ShellRunner({
     storePath: join(app.getPath('userData'), 'pending-shell-runs.json'),
-    onChange: (sessionPk, runs) => { if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.shellChanged, sessionPk, runs) },
+    onChange: (sessionPk, runs) => { hub.send(ENGINE_IPC.shellChanged, sessionPk, runs) },
     onFinished: run => coordinator.deliverShellOutput(run.sessionPk)
   })
+  // What MCP servers are asking, kept for a window that opens after they asked.
+  const questions = new PendingQuestions()
   const coordinator = new EngineCoordinator({
     folderExists: existsSync,
     contextForMessage: sessionPk => shellRunBlocks(shellRunner.takeFinished(sessionPk)),
@@ -334,10 +340,10 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
         pool.releaseIdle(target.filePath)
         coordinator.watchSession(target.sessionPk)
       }
-      if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.lockChanged, target.sessionPk, lock)
+      hub.send(ENGINE_IPC.lockChanged, target.sessionPk, lock)
     },
     onRemoteChange: (remote) => {
-      if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.remoteChanged, remote)
+      hub.send(ENGINE_IPC.remoteChanged, remote)
     }
   })
   lockMonitor.start()
@@ -432,8 +438,10 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
 
     return { ok: true, sessionPk: outcome.result.sessionPk, sessionId: outcome.result.sessionId }
   }
-  const onPickDirectory = async (): Promise<string | null> => {
-    const result = await dialog.showOpenDialog(window, { properties: ['openDirectory'] })
+  const onPickDirectory = async (e?: { sender: WebContents }): Promise<string | null> => {
+    const parent = windowOf(e?.sender)
+    const options: Electron.OpenDialogOptions = { properties: ['openDirectory'] }
+    const result = parent !== null ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]!
   }
@@ -448,7 +456,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
   // /mcp, /login and anything else headless mode can't do). Delegatto's own
   // idle process for the chat is closed first so the two never write at once;
   // the lock monitor then keeps the chat read-only here until the terminal exits.
-  ipcMain.handle(ENGINE_IPC.openInTerminal, async (_e, sessionPk: number): Promise<{ ok: true } | { ok: false; error: string; cancelled?: true }> => {
+  ipcMain.handle(ENGINE_IPC.openInTerminal, async (e, sessionPk: number): Promise<{ ok: true } | { ok: false; error: string; cancelled?: true }> => {
     const info = getEngineSessionInfo(db, sessionPk)
     if (info === null) return { ok: false, error: 'That chat is no longer available.' }
     if (pool.isTurnRunning(info.filePath)) {
@@ -462,7 +470,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
     if (flags.includes('--dangerously-skip-permissions') && hooks.ask !== undefined) {
       const loc = { claudeDir: claudeHome(), managedFiles: defaultManagedFiles() }
       if (!bypassAccepted(loc, info.cwd, readClaudeJson())) {
-        if (await hooks.ask(BYPASS_QUESTION) !== BYPASS_ACCEPT_INDEX) return { ok: false, error: '', cancelled: true }
+        if (await hooks.ask(BYPASS_QUESTION, e.sender) !== BYPASS_ACCEPT_INDEX) return { ok: false, error: '', cancelled: true }
         // If the file can't be written, the terminal just asks for itself.
         try { recordBypassAccepted(loc) } catch (err) { console.warn('Could not record bypass acceptance', err) }
       }
@@ -523,9 +531,9 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
       ...('extraDirs' in patch ? { extraDirs: patch.extraDirs } : {})
     }))
   // `/add-dir` with a folder, or the folder picker with none. A picker closed without choosing adds nothing.
-  ipcMain.handle(ENGINE_IPC.addProjectDir, async (_e, sessionPk: number, path: string | null) => {
+  ipcMain.handle(ENGINE_IPC.addProjectDir, async (e, sessionPk: number, path: string | null) => {
     const current = getProjectSettings(db, sessionPk)
-    const chosen = path ?? await onPickDirectory()
+    const chosen = path ?? await onPickDirectory(e)
     if (chosen === null) return { ok: true, added: null, settings: current }
     const info = getEngineSessionInfo(db, sessionPk)
     const dir = resolve(info?.cwd ?? '', chosen)
@@ -597,7 +605,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
   const chromeOn = (): boolean => chromeEnabledFor(getSettings(db).chromeIntegration, () => claudeChromeDefault())
   const claudeInfo = new ClaudeInfoService({ claudeBin, chromeEnabled: chromeOn })
   const planUsage = new PlanUsageTracker(join(app.getPath('userData'), 'plan-usage.json'))
-  planUsage.onChange(u => { if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.planUsageChanged, u) })
+  planUsage.onChange(u => { hub.send(ENGINE_IPC.planUsageChanged, u) })
   ipcMain.handle(ENGINE_IPC.planUsage, () => planUsage.get())
   // Left until the app has settled: nothing depends on it, and it starts a process.
   const planCheck = setTimeout(() => {
@@ -660,7 +668,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
     claudeBin,
     cwd: () => homedir(),
     openUrl: url => { void shell.openExternal(url) },
-    onChange: state => { if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.loginChanged, state) },
+    onChange: state => { hub.send(ENGINE_IPC.loginChanged, state) },
     onSignedIn: () => { reloadChatsIn(null); planUsageRefresh() }
   })
   ipcMain.handle(ENGINE_IPC.loginState, () => login.state)
@@ -675,7 +683,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
     reloadChatsIn(scope === 'user' ? null : cwd)
     return hooksOf(sessionPk)
   })
-  ipcMain.handle(ENGINE_IPC.removeHook, async (_e, sessionPk: number, hook: HookEntry): Promise<PanelResult<HooksListing> | { ok: false; cancelled: true }> => {
+  ipcMain.handle(ENGINE_IPC.removeHook, async (e, sessionPk: number, hook: HookEntry): Promise<PanelResult<HooksListing> | { ok: false; cancelled: true }> => {
     if (hook.scope === null || hook.config === null) return { ok: false, error: 'That hook isn’t in a settings file Delegatto can change.' }
     const choice = await hooks.ask?.({
       title: 'Remove this hook?',
@@ -683,7 +691,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
       buttons: [{ label: 'Cancel', kind: 'secondary' }, { label: 'Remove', kind: 'danger' }],
       defaultIndex: 0,
       cancelIndex: 0
-    })
+    }, e.sender)
     if (choice !== 1) return { ok: false, cancelled: true }
     const cwd = getEngineSessionInfo(db, sessionPk)?.cwd ?? null
     try {
@@ -695,7 +703,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
   ipcMain.handle(ENGINE_IPC.workspaceDiff, async (_e, sessionPk: number): Promise<PanelResult<WorkspaceDiff>> => {
     try { return { ok: true, value: parseWorkspaceDiff(await askAboutChat(sessionPk, 'get_workspace_diff', { quiet: true })) } } catch (err) { return { ok: false, error: errorText(err) } }
   })
-  ipcMain.handle(ENGINE_IPC.exportChat, async (_e, sessionPk: number, mode: 'file' | 'text', fileName?: string): Promise<ExportChatResult> => {
+  ipcMain.handle(ENGINE_IPC.exportChat, async (e, sessionPk: number, mode: 'file' | 'text', fileName?: string): Promise<ExportChatResult> => {
     try {
       const row = db.prepare('SELECT COALESCE(s.custom_title, s.ai_title, s.title) AS title, p.cwd AS cwd FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?').get(sessionPk) as { title: string | null; cwd: string | null } | undefined
       if (row === undefined) return { status: 'failed', message: 'That chat is no longer available.' }
@@ -708,11 +716,13 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
         // As `/export name` does in the terminal: into the chat's folder, as .txt.
         path = resolve(row.cwd, /\.[a-z0-9]+$/i.test(named) ? named : `${named}.txt`)
       } else {
-        const picked = await dialog.showSaveDialog(window, {
+        const parent = windowOf(e.sender)
+        const options: Electron.SaveDialogOptions = {
           title: 'Export chat',
           defaultPath: join(row.cwd !== null && existsSync(row.cwd) ? row.cwd : homedir(), exportFileName()),
           filters: [{ name: 'Text', extensions: ['txt', 'md'] }]
-        })
+        }
+        const picked = parent !== null ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
         if (picked.canceled || picked.filePath === undefined) return { status: 'cancelled' }
         path = picked.filePath
       }
@@ -792,9 +802,14 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
     return info === null ? null : pool.turnInfo(info.filePath)
   })
   ipcMain.handle(ENGINE_IPC.answerElicitation, (_e, sessionPk: number, requestId: string, answer: ElicitationAnswer) => {
+    // The other window drops the card too.
+    hub.send(ENGINE_IPC.event, sessionPk, questions.answer(sessionPk, requestId))
     const info = getEngineSessionInfo(db, sessionPk)
     if (info !== null) pool.respond(info.filePath, requestId, answer)
   })
+  // A window opened later (the split window) starts from what's already waiting.
+  ipcMain.handle(ENGINE_IPC.pendingPermissions, () => coordinator.pendingPermissionList())
+  ipcMain.handle(ENGINE_IPC.pendingQuestions, () => questions.list())
   ipcMain.handle(ENGINE_IPC.chatMode, (_e, sessionPk: number) => coordinator.modeOf(sessionPk))
   // A subagent that just finished isn't indexed until the next sweep, and there's no need to wait.
   ipcMain.handle(ENGINE_IPC.indexNow, async (): Promise<void> => {
@@ -863,7 +878,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
     const rewound = await pool.rewind(info.filePath, uuid)
     // A reload from when the turn stopped may be on its way, showing the message as it
     // was. This one reads the transcript as it is now, and overtakes it.
-    if (rewound && !window.isDestroyed()) window.webContents.send(ENGINE_IPC.indexed, sessionPk)
+    if (rewound) hub.send(ENGINE_IPC.indexed, sessionPk)
     return rewound
   })
   ipcMain.handle(ENGINE_IPC.taskOutput, (_e, sessionPk: number, taskId: string) => {
@@ -903,7 +918,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
       await syncSessionToCatalog(db, sessionPk).catch(err => console.error('Could not index the rewind', err))
       // The transcript says this by itself, except going back to a chat's first message.
       markRewoundFrom(db, sessionPk, uuid)
-      if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.indexed, sessionPk)
+      hub.send(ENGINE_IPC.indexed, sessionPk)
     }
     return { ok: true, prefill }
   })
@@ -928,7 +943,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
   // to wait out the debounce once the turn has actually settled).
   const indexDebouncer = createIndexDebouncer(
     (sessionPk) => syncSessionToCatalog(db, sessionPk),
-    (sessionPk) => { if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.indexed, sessionPk) }
+    (sessionPk) => { hub.send(ENGINE_IPC.indexed, sessionPk) }
   )
 
   // External-change sweep: picks up transcripts written outside Delegatto (a
@@ -941,8 +956,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
   const sweepOnce = async (): Promise<void> => {
     if (!isCatalogSettled()) return
     const { changedMain } = await sweepExternalChanges(db, { skip: (fp) => pool.isTurnRunning(fp) })
-    if (window.isDestroyed()) return
-    for (const sessionPk of changedMain) window.webContents.send(ENGINE_IPC.indexed, sessionPk)
+    for (const sessionPk of changedMain) hub.send(ENGINE_IPC.indexed, sessionPk)
     // Re-check locks too: catches a terminal that crashed without removing
     // its lock (no fs event), and a brand-new terminal chat the catalog only
     // just learned about in this sweep.
@@ -957,21 +971,22 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
     return next
   }
   const externalSweep = createPeriodicSweep(serialSweep)
-  const onWindowFocus = (): void => externalSweep.poke()
-  window.on('focus', onWindowFocus)
+  // Either window coming to the front looks for changes made outside.
+  const stopFocusSweep = hub.onAnyFocus(() => externalSweep.poke())
 
   coordinator.onEvent((sessionPk, e) => {
-    if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.event, sessionPk, e)
+    questions.onEvent(sessionPk, e)
+    hub.send(ENGINE_IPC.event, sessionPk, e)
     if (e.kind === 'result') indexDebouncer.now(sessionPk)
     if (e.kind === 'rate_limit' && e.reading !== undefined) planUsage.applyReading(e.reading)
     try { hooks.onEvent?.(sessionPk, e) } catch (err) { console.error('[engine] event hook failed', err) }
   })
   coordinator.onRows((sessionPk, rows) => {
-    if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.rows, sessionPk, rows)
+    hub.send(ENGINE_IPC.rows, sessionPk, rows)
     indexDebouncer.schedule(sessionPk)
   })
   coordinator.onPermission((sessionPk, req) => {
-    if (!window.isDestroyed()) window.webContents.send(ENGINE_IPC.permission, sessionPk, req)
+    hub.send(ENGINE_IPC.permission, sessionPk, req)
     try { hooks.onPermission?.(sessionPk, req) } catch (err) { console.error('[engine] permission hook failed', err) }
   })
 
@@ -1031,6 +1046,8 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
       for (const channel of [ENGINE_IPC.rewindPoints, ENGINE_IPC.rewindCheck, ENGINE_IPC.rewindTo, ENGINE_IPC.taskOutput, ENGINE_IPC.pinMessage, ENGINE_IPC.unpinMessage, ENGINE_IPC.listPins]) ipcMain.removeHandler(channel)
       ipcMain.removeHandler(ENGINE_IPC.stopTask)
       ipcMain.removeHandler(ENGINE_IPC.answerElicitation)
+      ipcMain.removeHandler(ENGINE_IPC.pendingPermissions)
+      ipcMain.removeHandler(ENGINE_IPC.pendingQuestions)
       ipcMain.removeHandler(ENGINE_IPC.chatMode)
       for (const channel of [ENGINE_IPC.indexNow, ENGINE_IPC.claudeFound, ENGINE_IPC.promptHistory, ENGINE_IPC.keepInHistory, ENGINE_IPC.renameChat, ENGINE_IPC.forkChat, ENGINE_IPC.sideQuestion]) ipcMain.removeHandler(channel)
       ipcMain.removeHandler(ENGINE_IPC.setChatMode)
@@ -1059,7 +1076,7 @@ export function registerEngineIpc(db: Catalog, window: BrowserWindow, hooks: Eng
       clearInterval(reapInterval)
       indexDebouncer.dispose()
       externalSweep.dispose()
-      if (!window.isDestroyed()) window.removeListener('focus', onWindowFocus)
+      stopFocusSweep()
       // Fix 3: tears down every SessionWatcher this coordinator ever
       // started -- previously nothing called disposeSession/disposeAll, so
       // every watcher leaked for the app's full life.

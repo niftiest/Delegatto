@@ -1,4 +1,5 @@
-import { ipcMain, app, shell, dialog, type BrowserWindow } from 'electron'
+import { ipcMain, app, shell, dialog, type BrowserWindow, type WebContents } from 'electron'
+import type { WindowHub } from './window-hub'
 import { copyFile, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { applyTheme, cleanThemeValues, deleteTheme, hasTheme, listThemes, parseThemeFile, saveTheme, themeFileText } from './catalog/themes'
@@ -6,8 +7,8 @@ import {
   LOCAL_THEME_PREFIX, MAX_THEME_FILE_BYTES, MAX_THEME_NAME, THEME_FILE_EXTENSION, cleanThemeName, isBuiltInThemeName, themeFileName, themeNameFromPath, themeValuesOf,
   type ExportThemeResult, type ImportThemeResult, type SaveThemeResult, type ThemeValues
 } from '../shared/themes'
-import type { AppDialogRequest } from '../shared/app-dialog'
-import { applyStartupSettings, relaunchElevated, isElevated } from './elevation'
+import type { MainDialogRequest } from '../shared/app-dialog'
+import { applyStartupSettings, relaunchElevated, isElevated, ELEVATED_RELAUNCH_ARG } from './elevation'
 import type { Catalog } from './catalog/db'
 import { listProjects, listSubagents, sumTotalCostUsd } from './catalog/repos'
 import { backupCatalogOnce, chatsToShow, folderGone, isConversationText, moveCustomisations, withoutMovedChats } from './catalog/archive'
@@ -227,14 +228,19 @@ export type IpcHooks = {
   /** Settings were saved (tray options may have changed). */
   onSettingsChanged?: (s: AppSettings) => void
   /** A question in the app's own window. Answers with the button's index. */
-  ask?: (request: Omit<AppDialogRequest, 'id'>) => Promise<number>
+  ask?: (request: Omit<MainDialogRequest, 'id'>, from?: WebContents) => Promise<number>
+  /** Before a restart stops chats that are working: true when nothing is working or
+   *  the user agrees. The same question the close button asks. */
+  confirmRestart?: () => Promise<boolean>
 }
 
 /** Startup registrations launch Delegatto with this, so "Start minimized"
  *  applies to a login start, not to the user opening the app themselves. */
 export const AUTOSTART_ARG = '--autostart'
 
-export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks = {}): void {
+export function registerIpc(db: Catalog, hub: WindowHub, hooks: IpcHooks = {}): void {
+  /** The window a request came from, for a native dialog's parent; else the main window. */
+  const windowOf = (sender: WebContents): BrowserWindow | null => hub.fromContents(sender) ?? hub.main()
   seedLocalSecrets(db)
   ipcMain.handle(IPC.listProjects, () => listProjects(db))
   ipcMain.handle(IPC.listSessions, (_e, projectId: number) => chatsToShow(db, projectId))
@@ -247,7 +253,7 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
   ipcMain.handle(IPC.indexRun, async () => {
     await runIndex(db, {
       onProgress: p => {
-        if (!window.isDestroyed()) window.webContents.send(IPC.indexProgress, p)
+        hub.send(IPC.indexProgress, p)
         hooks.onIndexProgress?.(p)
       }
     })
@@ -305,31 +311,59 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
   ipcMain.handle(IPC.openRouterUsage, () => fetchUsage(getSettings(db).openRouterKey))
   ipcMain.handle(IPC.saveImage, (_e, cwd: string, relPath: string, dataUrl: string) => saveImage({ cwd, relPath, dataUrl }))
   ipcMain.handle(IPC.getSettings, () => getSettings(db))
-  ipcMain.handle(IPC.updateSettings, (_e, patch: Partial<AppSettings>) => {
+  ipcMain.handle(IPC.updateSettings, async (e, patch: Partial<AppSettings>) => {
     const before = getSettings(db)
-    const after = updateSettings(db, patch)
+    let after = updateSettings(db, patch)
+    const applyStartup = (s: AppSettings): void => applyStartupSettings({
+      startWithWindows: s.startWithWindows,
+      startWithAdmin: s.startWithAdmin,
+      exePath: launchExePath(app.getPath('exe')),
+      appArgs: [AUTOSTART_ARG]
+    })
     // Reconcile OS startup registration when a startup/admin field changed.
     if (before.startWithWindows !== after.startWithWindows || before.startWithAdmin !== after.startWithAdmin) {
-      applyStartupSettings({
-        startWithWindows: after.startWithWindows,
-        startWithAdmin: after.startWithAdmin,
-        exePath: launchExePath(app.getPath('exe')),
-        appArgs: [AUTOSTART_ARG]
-      })
-      // Newly enabling admin: relaunch elevated (one UAC prompt), then quit.
-      if (after.startWithAdmin && !before.startWithAdmin && !isElevated()) {
-        if (relaunchElevated(launchExePath(app.getPath('exe')))) app.quit()
+      // Newly enabling admin: relaunch elevated (one UAC prompt). This instance quits only
+      // once the elevated one has started; otherwise the setting goes back off. The startup
+      // registration is left alone until then: only the elevated instance can create the
+      // admin logon task, and it does so when it starts.
+      const relaunching = after.startWithAdmin && !before.startWithAdmin && process.platform === 'win32' && !isElevated()
+      if (!relaunching) applyStartup(after)
+      if (relaunching) {
+        const outcome = await restartElevated(e.sender)
+        if (outcome === 'started') {
+          app.quit()
+        } else {
+          after = updateSettings(db, { startWithAdmin: false })
+          applyStartup(after)
+        }
       }
     }
     hooks.onSettingsChanged?.(after)
     return after
   })
+  /** Asks about working chats, then raises the UAC prompt. A notice says why when it didn't
+   *  restart for a reason other than the user saying no to the chats question. */
+  async function restartElevated(from: WebContents): Promise<'started' | 'cancelled' | 'failed'> {
+    const notice = (title: string, detail: string): void => {
+      void hooks.ask?.({ title, detail: [detail], buttons: [{ label: 'OK', kind: 'primary' }], defaultIndex: 0, cancelIndex: 0 }, from)
+    }
+    // A development run's exe is Electron itself, which can't start this app on its own.
+    if (!app.isPackaged) {
+      notice('Delegatto can’t restart as administrator here', 'Restarting as administrator only works in the installed or portable app.')
+      return 'failed'
+    }
+    if (hooks.confirmRestart !== undefined && !(await hooks.confirmRestart())) return 'cancelled'
+    const outcome = await relaunchElevated(launchExePath(app.getPath('exe')), [ELEVATED_RELAUNCH_ARG])
+    if (outcome === 'started') return 'started'
+    notice('Windows didn’t allow Delegatto to restart as administrator', 'Start with Admin Rights is off again. Turn it on to try again, and choose Yes when Windows asks.')
+    return 'failed'
+  }
   ipcMain.handle(IPC.isElevated, () => isElevated())
 
   ipcMain.handle(IPC.listThemes, () => listThemes(db))
   ipcMain.handle(IPC.listLocalThemes, () => listLocalThemes(localThemesDir(app.getPath('userData'))))
   ipcMain.handle(IPC.openLocalThemes, async () => { await shell.openPath(ensureLocalThemesDir(localThemesDir(app.getPath('userData')))) })
-  ipcMain.handle(IPC.saveTheme, async (_e, rawName: unknown, values: ThemeValues | null): Promise<SaveThemeResult> => {
+  ipcMain.handle(IPC.saveTheme, async (e, rawName: unknown, values: ThemeValues | null): Promise<SaveThemeResult> => {
     const name = cleanThemeName(rawName)
     if (name === null) return { ok: false, reason: 'name', message: `Enter a name of up to ${MAX_THEME_NAME} characters.` }
     if (isBuiltInThemeName(name)) return { ok: false, reason: 'builtin', message: `${name} is a built-in theme, which can't be overwritten. Choose another name.` }
@@ -340,7 +374,7 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
         buttons: [{ label: 'Cancel', kind: 'secondary' }, { label: 'Overwrite', kind: 'danger' }],
         defaultIndex: 0,
         cancelIndex: 0
-      })
+      }, e.sender)
       if (choice !== 1) return { ok: false, reason: 'cancelled' }
     }
     const saved = saveTheme(db, name, values === null || values === undefined ? null : values)
@@ -352,7 +386,7 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
     if (after !== null) hooks.onSettingsChanged?.(after)
     return after
   })
-  ipcMain.handle(IPC.deleteTheme, async (_e, name: unknown) => {
+  ipcMain.handle(IPC.deleteTheme, async (e, name: unknown) => {
     if (typeof name !== 'string' || !hasTheme(db, name)) return null
     const choice = await hooks.ask?.({
       title: `Delete ${name}?`,
@@ -360,16 +394,18 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
       buttons: [{ label: 'Cancel', kind: 'secondary' }, { label: 'Delete', kind: 'danger' }],
       defaultIndex: 0,
       cancelIndex: 0
-    })
+    }, e.sender)
     if (choice !== 1) return null
     return deleteTheme(db, name)
   })
-  ipcMain.handle(IPC.exportTheme, async (_e, suggestedName: unknown): Promise<ExportThemeResult> => {
-    const result = await dialog.showSaveDialog(window, {
+  ipcMain.handle(IPC.exportTheme, async (e, suggestedName: unknown): Promise<ExportThemeResult> => {
+    const parent = windowOf(e.sender)
+    const options: Electron.SaveDialogOptions = {
       title: 'Export theme',
       defaultPath: themeFileName(cleanThemeName(suggestedName) ?? 'My theme'),
       filters: [{ name: 'Delegatto theme', extensions: [THEME_FILE_EXTENSION] }]
-    })
+    }
+    const result = parent !== null ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
     if (result.canceled || result.filePath === undefined) return { status: 'cancelled' }
     // The name it comes back with is the one the user gave the file.
     const name = cleanThemeName(themeNameFromPath(result.filePath)) ?? 'Theme'
@@ -382,7 +418,7 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
   })
   /** A .css theme goes into this PC's themes folder, where the app looks for them. A file
    *  already there (picked from that folder) is used as it is. */
-  async function importCssTheme(path: string): Promise<ImportThemeResult> {
+  async function importCssTheme(path: string, from: WebContents): Promise<ImportThemeResult> {
     const name = localThemeName(basename(path))
     if (name === null) return { status: 'invalid', message: `${basename(path)} can’t be a theme name. Rename the file, keeping .css, and import it again.` }
     try {
@@ -398,7 +434,7 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
             buttons: [{ label: 'Cancel', kind: 'secondary' }, { label: 'Replace', kind: 'danger' }],
             defaultIndex: 0,
             cancelIndex: 0
-          })
+          }, from)
           if (choice !== 1) return { status: 'cancelled' }
           // A file named Midnight.css replaces midnight.css, rather than sitting next to it.
           if (existing.name !== name) await unlink(join(dir, `${existing.name}.css`)).catch(() => undefined)
@@ -410,8 +446,9 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
       return { status: 'invalid', message: `Couldn’t import ${basename(path)}: ${e instanceof Error ? e.message : String(e)}` }
     }
   }
-  ipcMain.handle(IPC.importTheme, async (): Promise<ImportThemeResult> => {
-    const result = await dialog.showOpenDialog(window, {
+  ipcMain.handle(IPC.importTheme, async (e): Promise<ImportThemeResult> => {
+    const parent = windowOf(e.sender)
+    const options: Electron.OpenDialogOptions = {
       title: 'Import theme',
       properties: ['openFile'],
       filters: [
@@ -419,10 +456,11 @@ export function registerIpc(db: Catalog, window: BrowserWindow, hooks: IpcHooks 
         { name: 'Delegatto theme', extensions: [THEME_FILE_EXTENSION, 'json'] },
         { name: 'Theme stylesheet (this PC only)', extensions: ['css'] }
       ]
-    })
+    }
+    const result = parent !== null ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
     const path = result.filePaths[0]
     if (result.canceled || path === undefined) return { status: 'cancelled' }
-    if (/\.css$/i.test(path)) return importCssTheme(path)
+    if (/\.css$/i.test(path)) return importCssTheme(path, e.sender)
     const notTheme = { status: 'invalid', message: `${basename(path)} isn’t a Delegatto theme file.` } as const
     let text: string
     try {

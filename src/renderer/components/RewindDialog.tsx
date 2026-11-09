@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogTarget } from './DialogHost'
+import { escapeIsFor } from '../escape-scope'
 import { api } from '../api'
 import { formatClock } from '../lib'
 import type { RewindCheck, RewindMode, RewindPoint } from '../../shared/engine-ipc-contract'
@@ -11,6 +13,7 @@ export function RewindDialog({ sessionPk, onClose, onDone }: {
   onClose: () => void
   onDone: (result: { mode: RewindMode; uuid: string; prefill: string | null }) => void
 }) {
+  const dialogTarget = useDialogTarget()
   const [points, setPoints] = useState<RewindPoint[] | null>(null)
   const [picked, setPicked] = useState<RewindPoint | null>(null)
   const [check, setCheck] = useState<RewindCheck | null>(null)
@@ -28,7 +31,7 @@ export function RewindDialog({ sessionPk, onClose, onDone }: {
   useEffect(() => {
     // Ahead of everything else: behind this dialog, Esc would act on the message box.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || !escapeIsFor(dialogTarget, e)) return
       e.preventDefault()
       e.stopImmediatePropagation()
       if (working) return
@@ -36,7 +39,7 @@ export function RewindDialog({ sessionPk, onClose, onDone }: {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [picked, working, onClose])
+  }, [picked, working, onClose, dialogTarget])
 
   const go = (mode: RewindMode): void => {
     if (picked === null) return
@@ -101,6 +104,6 @@ export function RewindDialog({ sessionPk, onClose, onDone }: {
         )}
       </div>
     </div>,
-    document.body
+    dialogTarget
   )
 }

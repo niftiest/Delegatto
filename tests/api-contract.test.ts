@@ -27,9 +27,9 @@ const ENGINE_COMMAND_KEYS = ['send', 'interrupt', 'resolvePermission'] as const
 // main answers with ipcMain.handle -- newChat/pickDirectory both need a
 // reply (the new session's ids, or the chosen folder), unlike the
 // fire-and-forget command channels above.
-const ENGINE_INVOKE_KEYS = ['newChat', 'pickDirectory'] as const
+const ENGINE_INVOKE_KEYS = ['newChat', 'pickDirectory', 'pendingPermissions', 'pendingQuestions'] as const
 
-// broadcast channels: main pushes with webContents.send, renderer subscribes
+// broadcast channels: main pushes to every window with hub.send, renderer subscribes
 // with ipcRenderer.on.
 const ENGINE_BROADCAST_KEYS = ['event', 'rows', 'permission', 'indexed'] as const
 
@@ -42,7 +42,7 @@ describe('IPC contract', () => {
   })
 
   it('broadcasts index progress on the channel the preload subscribes to', () => {
-    expect(ipcSrc).toMatch(/webContents\.send\(\s*IPC\.indexProgress\b/)
+    expect(ipcSrc).toMatch(/hub\.send\(\s*IPC\.indexProgress\b/)
     expect(preloadSrc).toMatch(/ipcRenderer\.on\(\s*IPC\.indexProgress\b/)
   })
 
@@ -53,6 +53,52 @@ describe('IPC contract', () => {
     // standalone "IPC.".
     const referenced = new Set([...preloadSrc.matchAll(/\bIPC\.(\w+)/g)].map(m => m[1]))
     expect(referenced).toEqual(new Set(Object.keys(IPC)))
+  })
+
+  it('records the chats each window reports on the visibleChats channel', () => {
+    expect(mainSrc).toMatch(/ipcMain\.on\(\s*IPC\.visibleChats\b/)
+    expect(preloadSrc).toMatch(/ipcRenderer\.send\(\s*IPC\.visibleChats\b/)
+  })
+
+  it('broadcasts every window\'s shown chats on the visibleChatsChanged channel', () => {
+    expect(mainSrc).toMatch(/hub\.send\(\s*IPC\.visibleChatsChanged\b/)
+    expect(preloadSrc).toMatch(/ipcRenderer\.on\(\s*IPC\.visibleChatsChanged\b/)
+  })
+
+  it('broadcasts saved settings on the settingsChanged channel', () => {
+    expect(mainSrc).toMatch(/hub\.send\(\s*IPC\.settingsChanged\b/)
+    expect(preloadSrc).toMatch(/ipcRenderer\.on\(\s*IPC\.settingsChanged\b/)
+  })
+
+  it('handles every split view channel the preload calls, and broadcasts its state to every window', () => {
+    const splitSrc = readFileSync(join(root, 'src/main/split-window.ts'), 'utf8')
+    for (const key of ['splitViewOpen', 'splitViewGet', 'splitViewSetLayout', 'splitViewSetPane', 'splitViewSetRatios', 'splitViewSwap']) {
+      expect(splitSrc).toMatch(new RegExp(`ipcMain\\.handle\\(\\s*IPC\\.${key}\\b`))
+      expect(preloadSrc).toMatch(new RegExp(`ipcRenderer\\.invoke\\(\\s*IPC\\.${key}\\b`))
+    }
+    expect(splitSrc).toMatch(/hub\.send\(\s*IPC\.splitViewChanged\b/)
+    expect(preloadSrc).toMatch(/ipcRenderer\.on\(\s*IPC\.splitViewChanged\b/)
+  })
+
+  it('brings the main window forward for a pane, and hands the action to the main window only', () => {
+    const splitSrc = readFileSync(join(root, 'src/main/split-window.ts'), 'utf8')
+    expect(splitSrc).toMatch(/ipcMain\.on\(\s*IPC\.focusMain\b/)
+    expect(preloadSrc).toMatch(/ipcRenderer\.send\(\s*IPC\.focusMain\b/)
+    expect(splitSrc).toMatch(/main\.webContents\.send\(\s*IPC\.mainAction\b/)
+    expect(splitSrc).not.toMatch(/hub\.send\(\s*IPC\.mainAction\b/)
+    expect(preloadSrc).toMatch(/ipcRenderer\.on\(\s*IPC\.mainAction\b/)
+  })
+
+  it('creates the split window with nodeIntegration disabled and contextIsolation enabled', () => {
+    const splitSrc = readFileSync(join(root, 'src/main/split-window.ts'), 'utf8')
+    expect(splitSrc).toMatch(/contextIsolation:\s*true/)
+    expect(splitSrc).toMatch(/nodeIntegration:\s*false/)
+  })
+
+  it('no longer has the one-chat sync presence channel', () => {
+    const syncTypes = readFileSync(join(root, 'src/shared/sync-types.ts'), 'utf8')
+    const syncIpcSrc = readFileSync(join(root, 'src/main/sync-ipc.ts'), 'utf8')
+    for (const src of [syncTypes, syncIpcSrc, preloadSrc]) expect(src).not.toMatch(/chatOpened|syncChatOpened/)
   })
 
   it('creates the window with nodeIntegration disabled and contextIsolation enabled', () => {
@@ -76,9 +122,15 @@ describe('Engine IPC contract', () => {
     }
   })
 
+  it('keeps the questions MCP servers ask, and forgets one once it is answered, in every window', () => {
+    expect(engineIpcSrc).toMatch(/questions\.onEvent\(\s*sessionPk,\s*e\s*\)/)
+    // The answer goes to every window, so the card leaves the other one too.
+    expect(engineIpcSrc).toMatch(/hub\.send\(\s*ENGINE_IPC\.event,\s*sessionPk,\s*questions\.answer\(\s*sessionPk,\s*requestId\s*\)\s*\)/)
+  })
+
   it('broadcasts every live channel the preload subscribes to', () => {
     for (const key of ENGINE_BROADCAST_KEYS) {
-      expect(engineIpcSrc).toMatch(new RegExp(`webContents\\.send\\(\\s*ENGINE_IPC\\.${key}\\b`))
+      expect(engineIpcSrc).toMatch(new RegExp(`hub\\.send\\(\\s*ENGINE_IPC\\.${key}\\b`))
       expect(preloadSrc).toMatch(new RegExp(`ipcRenderer\\.on\\(\\s*ENGINE_IPC\\.${key}\\b`))
     }
   })

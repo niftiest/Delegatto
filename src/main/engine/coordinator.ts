@@ -370,7 +370,18 @@ export class EngineCoordinator {
   resolvePermission(id: string, decision: 'allow' | 'allow_always' | 'allow_folder' | 'deny', editedInput?: unknown, denyMessage?: string): void {
     const pending = this.pendingPermissions.get(id)
     this.pendingPermissions.delete(id)
+    try {
+      this.answerPermission(id, pending, decision, editedInput, denyMessage)
+    } finally {
+      // Every window showing the card drops it, not only the one that answered.
+      if (pending !== undefined) this.emitEvent(pending.sessionPk, { kind: 'permissionGone', id })
+    }
+  }
 
+  private answerPermission(
+    id: string, pending: PendingPermission | undefined,
+    decision: 'allow' | 'allow_always' | 'allow_folder' | 'deny', editedInput?: unknown, denyMessage?: string
+  ): void {
     if (decision === 'deny') {
       this.deps.bridge.resolve(id, { behavior: 'deny', message: denyMessage ?? 'Denied by user' })
       return
@@ -400,6 +411,11 @@ export class EngineCoordinator {
     }
 
     this.deps.bridge.resolve(id, { behavior: 'allow', updatedInput: editedInput ?? pending?.req.input, ...(suggestions.length > 0 ? { updatedPermissions: suggestions } : {}) })
+  }
+
+  /** The requests still waiting on an answer, oldest first, for a window opened after they came. */
+  pendingPermissionList(): Array<{ sessionPk: number; req: PermissionRequest }> {
+    return [...this.pendingPermissions.values()].map(p => ({ sessionPk: p.sessionPk, req: p.req }))
   }
 
   onEvent(cb: (sessionPk: number, e: LiveEvent) => void): void {

@@ -70,8 +70,11 @@ export function shellCommandOf(text: string): string | null {
 export class ComposeStore {
   private readonly states = new Map<number, ComposeState>()
   private readonly listeners = new Set<() => void>()
-  /** The chat whose message box is on screen; that box handles its own sending. */
-  private open: number | null = null
+  /** The message boxes on screen for each chat, in the order they opened. A box handles its
+   *  own chat's sending. */
+  private readonly boxes = new Map<number, object[]>()
+  /** The box last focused for each chat, among those on screen. */
+  private readonly focused = new Map<number, object>()
   /** Each chat's message going through Claude Code now, so it can come back if it ends early. */
   private readonly current = new Map<number, SentMessage>()
   /** Messages given to Claude Code during a turn, until each one starts. */
@@ -97,8 +100,51 @@ export class ComposeStore {
     this.update(sessionPk, s => ({ ...s, queue: queueReducer(s.queue, action) }))
   }
 
-  setOpen(sessionPk: number | null): void {
-    this.open = sessionPk
+  /** A message box for this chat is on screen. `box` names it, for isLead. Returns the call
+   *  that releases it. */
+  markOpen(sessionPk: number, box: object = {}): () => void {
+    this.boxes.set(sessionPk, [...(this.boxes.get(sessionPk) ?? []), box])
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const left = (this.boxes.get(sessionPk) ?? []).filter(b => b !== box)
+      if (left.length > 0) this.boxes.set(sessionPk, left)
+      else this.boxes.delete(sessionPk)
+      if (this.focused.get(sessionPk) === box) this.focused.delete(sessionPk)
+    }
+  }
+
+  isOpen(sessionPk: number): boolean {
+    return this.boxes.has(sessionPk)
+  }
+
+  /** The user is working in this box. */
+  focusBox(sessionPk: number, box: object): void {
+    if (this.boxes.get(sessionPk)?.includes(box) === true) this.focused.set(sessionPk, box)
+  }
+
+  /** With the same chat in two panes, one box takes what comes back to the chat and sends
+   *  what it holds: the focused one, or else the first opened. */
+  isLead(sessionPk: number, box: object): boolean {
+    const open = this.boxes.get(sessionPk)
+    if (open === undefined || !open.includes(box)) return false
+    return (this.focused.get(sessionPk) ?? open[0]) === box
+  }
+
+  /** The message waiting to come back to this chat's box, taken so no other box gets it too. */
+  takeReturned(sessionPk: number): string | null {
+    const text = this.get(sessionPk).returned ?? null
+    if (text === null) return null
+    this.update(sessionPk, s => ({ ...s, returned: null }))
+    return text
+  }
+
+  /** Takes a held message off the queue to send it. False when it's gone already. */
+  claimHeld(sessionPk: number, id: string): boolean {
+    if (!this.get(sessionPk).queue.some(m => m.id === id)) return false
+    this.dispatch(sessionPk, { type: 'remove', id })
+    return true
   }
 
   /** A message going to Claude Code. With a `uuid` it waits its turn there. `ownId` names
@@ -166,9 +212,9 @@ export class ComposeStore {
       if (ev.state !== 'queued') this.waiting.delete(ev.uuid)
       if (ev.state === 'started' || ev.state === 'completed') this.dispatch(sessionPk, { type: 'removeUuid', uuid: ev.uuid })
       // On screen, the box puts it back in front of the user. Elsewhere it waits to be seen.
-      if (ev.state === 'cancelled' && sessionPk !== this.open) this.dispatch(sessionPk, { type: 'holdUuid', uuid: ev.uuid })
+      if (ev.state === 'cancelled' && !this.isOpen(sessionPk)) this.dispatch(sessionPk, { type: 'holdUuid', uuid: ev.uuid })
     }
-    if (sessionPk === this.open || !clearsRunning(ev)) return
+    if (this.isOpen(sessionPk) || !clearsRunning(ev)) return
     // A queued `!` needs nothing from the chat being open. Anything else waits for it,
     // since sending can need a question answered first.
     const next = nextHeld(this.get(sessionPk).queue)

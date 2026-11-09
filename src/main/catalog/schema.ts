@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 12
 
 // The base (v1) schema. Applied unconditionally on every open (see db.ts) --
 // every statement here has been additive-safe (CREATE ... IF NOT EXISTS)
@@ -193,5 +193,9 @@ export const MIGRATIONS: Migration[] = [
   { toVersion: 8, apply: countUsagePerMessage },
   { toVersion: 9, apply: addChatNames },
   { toVersion: 10, apply: addRewoundColumn },
-  { toVersion: 11, apply: db => db.exec(MIGRATION_11_PINS) }
+  { toVersion: 11, apply: db => db.exec(MIGRATION_11_PINS) },
+  // Routine resume notes were read as rewinds, hiding messages: a synced chat's, for one, when
+  // the other PC's Claude noted its place before they arrived. Chats with anything hidden are
+  // read again from the start (an offset past the end reads as rewritten), keeping pins.
+  { toVersion: 12, apply: db => db.exec('UPDATE sessions SET indexed_offset = 9007199254740991, file_size = -1 WHERE id IN (SELECT DISTINCT session_pk FROM messages WHERE rewound = 1)') }
 ]

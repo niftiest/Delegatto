@@ -71,6 +71,8 @@ export type LiveEvent =
   | { kind: 'permissionGone'; id: string }
   /** An MCP server needs something from the user. Claude's tool call waits for the answer. */
   | { kind: 'elicitation'; request: Elicitation }
+  /** An MCP question was answered in one window, so every window drops its card. Sent by main. */
+  | { kind: 'elicitationGone'; requestId: string }
   /** An API call failed and is being retried, so a quiet chat isn't simply stuck. */
   | { kind: 'retry'; attempt: number; maxRetries: number; delayMs: number; error: string | null }
   /** A hook from the user's settings starting or finishing. */

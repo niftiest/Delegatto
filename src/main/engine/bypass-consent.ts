@@ -1,5 +1,5 @@
 import { readJsonFile, settingsPath, writeSettings, type SettingsLocations } from '../claude-settings/files'
-import type { AppDialogRequest } from '../../shared/app-dialog'
+import type { MainDialogRequest } from '../../shared/app-dialog'
 
 /** Claude Code's one-time question before an interactive run with
  *  --dangerously-skip-permissions: "Yes, I accept" or "No, exit". Delegatto's own chats
@@ -25,7 +25,7 @@ export function recordBypassAccepted(loc: SettingsLocations): void {
 }
 
 /** Claude Code's own wording. No is the safe answer, as in the terminal. */
-export const BYPASS_QUESTION: Omit<AppDialogRequest, 'id'> = {
+export const BYPASS_QUESTION: Omit<MainDialogRequest, 'id'> = {
   title: 'Claude Code running in Bypass Permissions mode',
   detail: [
     'This chat opens in the terminal with permission prompts off. In Bypass Permissions mode, Claude Code will not ask for your approval before running potentially dangerous commands.',

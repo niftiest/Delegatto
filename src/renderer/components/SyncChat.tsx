@@ -28,7 +28,6 @@ export function useSyncChat(sessionPk: number | null) {
 
   useEffect(() => {
     refresh()
-    api.syncChatOpened(sessionPk)
     return api.onSyncChanged(s => {
       setConflicts(s.conflicts)
       refresh()

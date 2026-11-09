@@ -1,23 +1,26 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogTarget } from './DialogHost'
+import { escapeIsFor } from '../escape-scope'
 
 /** The header's terminal button. Moving a chat to a terminal takes it out of the app's
  *  hands, so it asks first. While Claude is replying the move can't happen, so going
  *  straight on lets `onOpen` say so rather than asking about something that won't work. */
 export function OpenInTerminalButton({ running, onOpen }: { running: boolean; onOpen: () => void }) {
+  const dialogTarget = useDialogTarget()
   const [asking, setAsking] = useState(false)
   useEffect(() => {
     if (!asking) return
     // Ahead of everything else: behind this dialog, Esc would act on the message box.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || !escapeIsFor(dialogTarget, e)) return
       e.preventDefault()
       e.stopImmediatePropagation()
       setAsking(false)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [asking])
+  }, [asking, dialogTarget])
   return (
     <>
       <button type="button" className="chead-term chead-term-icon" title="Open in terminal" aria-label="Open in terminal"
@@ -40,7 +43,7 @@ export function OpenInTerminalButton({ running, onOpen }: { running: boolean; on
             </div>
           </div>
         </div>,
-        document.body
+        dialogTarget
       )}
     </>
   )

@@ -49,8 +49,10 @@ export async function sweepExternalChanges(
   opts: { home?: string; skip?: (filePath: string) => boolean } = {}
 ): Promise<SweepResult> {
   const stored = loadStoredStats(db)
-  const changed = discover(opts.home ?? claudeHome(), { readMeta: false })
-    .filter(f => hasChanged(f, stored.get(f.filePath)) && !(opts.skip?.(f.filePath) ?? false))
+  const differing = discover(opts.home ?? claudeHome(), { readMeta: false }).filter(f => hasChanged(f, stored.get(f.filePath)))
+  const skipped = differing.filter(f => opts.skip?.(f.filePath) ?? false)
+  const changed = differing.filter(f => !skipped.includes(f))
+  if (skipped.length > 0) console.log(`[sweep] left for later, a reply is running: ${skipped.map(f => f.filePath).join(", ")}`)
   // Main transcripts first so a new subagent's toolUseId resolves against a
   // present parent (same ordering runIndex uses).
   changed.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'main' ? -1 : 1))
@@ -68,6 +70,7 @@ export async function sweepExternalChanges(
       console.error(`[external-sync] failed to index ${file.filePath}:`, err)
     }
   }
+  if (result.changedMain.length > 0) console.log(`[sweep] re-indexed chats ${result.changedMain.join(", ")}`)
   return result
 }
 

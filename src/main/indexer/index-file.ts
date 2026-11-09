@@ -1,4 +1,4 @@
-import { rewoundUuids } from '../jsonl/rewound'
+import { isExplicitNote, rewoundUuids } from '../jsonl/rewound'
 import type { Catalog } from '../catalog/db'
 import { upsertProject, setProjectCwd, upsertSession } from '../catalog/repos'
 import { streamRows } from '../jsonl/stream'
@@ -132,9 +132,14 @@ export async function indexFile(db: Catalog, file: DiscoveredFile): Promise<Inde
       if (row.type === 'custom-title' && typeof (row as { customTitle?: unknown }).customTitle === 'string') customTitle = (row as unknown as { customTitle: string }).customTitle
       if (row.type === 'ai-title' && typeof (row as { aiTitle?: unknown }).aiTitle === 'string') aiTitle = (row as unknown as { aiTitle: string }).aiTitle
       if (row.type === 'last-prompt') {
-        // Claude Code saying where the chat now resumes from. Pointing back at a reply with
-        // a typed message after it, the chat went back to there. Only a typed message: a
-        // tool's result after the reply is an ordinary turn, and real chats do have those.
+        // Claude Code saying where the chat now resumes from. Only a note marked explicit
+        // counts, as for Claude Code itself: a rewind writes one, while the routine notes a
+        // Claude writes as it goes can lag behind, such as one closing just as another PC's
+        // messages arrive, and would otherwise hide those messages.
+        if (!isExplicitNote(row)) continue
+        // Pointing back at a reply with a typed message after it, the chat went back to
+        // there. Only a typed message: a tool's result after the reply is an ordinary turn,
+        // and real chats do have those.
         const leaf = (row as { leafUuid?: unknown }).leafUuid
         const from = typeof leaf === 'string' ? leafOf.get(sessionPk, leaf) as { seq: number; role: string } | undefined : undefined
         if (from?.role === 'assistant') {

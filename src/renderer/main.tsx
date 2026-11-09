@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { SplitApp } from './SplitApp'
 import { api } from './api'
 import { setModelPrices } from '../shared/models'
 import { AppDialogHost } from './components/AppDialog'
@@ -19,5 +20,8 @@ void loadClaudeModels()
 // Costs show from the first paint, so this comes before it. Main has its answer ready within a
 // moment, or a second or two straight after Claude Code has updated.
 void api.modelPrices().then(setModelPrices).catch(() => { /* the built-in prices stand */ }).finally(() => {
-  createRoot(document.getElementById('root')!).render(<><App /><AppDialogHost /></>)
+  // The split window loads the same page with ?view=split. Questions main asks of either
+  // window show in that window, so both host the app dialogs.
+  const splitView = new URLSearchParams(location.search).get('view') === 'split'
+  createRoot(document.getElementById('root')!).render(<>{splitView ? <SplitApp /> : <App />}<AppDialogHost /></>)
 })

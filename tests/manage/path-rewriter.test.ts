@@ -88,3 +88,14 @@ describe('PathRewriter', () => {
     expect(() => new PathRewriter(r`D:\x`, '')).toThrow()
   })
 })
+
+describe('PathRewriter — a path ending a sentence', () => {
+  it('rewrites the folder when a period ends the sentence, but not a folder whose name goes on', () => {
+    const r = new PathRewriter('D:\\GIT\\SockProxy', 'C:\\Work\\HotspotProxy')
+    expect(r.rewrite('The working directory is D:\\GIT\\SockProxy.')).toBe('The working directory is C:\\Work\\HotspotProxy.')
+    // As it sits in a transcript row: JSON-escaped, then the end of the string.
+    expect(r.rewrite('"is D:\\\\GIT\\\\SockProxy.","is_error":true')).toBe('"is C:\\\\Work\\\\HotspotProxy.","is_error":true')
+    expect(r.rewrite('copied to D:\\GIT\\SockProxy.old for now')).toBe('copied to D:\\GIT\\SockProxy.old for now')
+    expect(r.rewrite('D:\\GIT\\SockProxy.com')).toBe('D:\\GIT\\SockProxy.com')
+  })
+})

@@ -3,7 +3,8 @@ import type { PlanUsage } from '../shared/plan-usage'
 import type { AppDialogRequest } from '../shared/app-dialog'
 import type { ShellRun } from '../shared/shell-run-types'
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { IPC, type DelegattoApi, type IndexProgress } from '../shared/ipc'
+import { IPC, type DelegattoApi, type IndexProgress, type MainAction, type VisibleChats } from '../shared/ipc'
+import type { SplitState } from '../shared/split-view'
 import { ENGINE_IPC, type EngineApi, type NewProjectOptions, type NewChatOutcome } from '../shared/engine-ipc-contract'
 import type { LiveEvent, PermissionRequest, ExternalLock, RemoteSession } from '../shared/engine-types'
 import type { StreamedRow } from '../main/jsonl/stream'
@@ -12,6 +13,7 @@ import { UPDATE_IPC, type UpdateApi, type UpdateStatus } from '../shared/update-
 import { CLAUDE_SETTINGS_IPC, type AutoCleanResult, type ClaudeSettingsApi } from '../shared/claude-settings-types'
 import { SYNC_IPC, type EnableProgress, type SyncIncoming, type ScanProgress, type SyncApi, type SyncStatus } from '../shared/sync-types'
 import type { LoginState } from '../shared/login-types'
+import type { AppSettings } from '../shared/shell-types'
 
 const api: DelegattoApi & EngineApi = {
   listProjects: () => ipcRenderer.invoke(IPC.listProjects),
@@ -23,6 +25,13 @@ const api: DelegattoApi & EngineApi = {
   searchProject: (projectId, query) => ipcRenderer.invoke(IPC.searchProject, projectId, query),
   runIndex: () => ipcRenderer.invoke(IPC.indexRun),
   appReady: () => ipcRenderer.send(IPC.appReady),
+  appLog: (text: string) => ipcRenderer.send(IPC.appLog, String(text).slice(0, 2000)),
+  setVisibleChats: (pks: number[]) => ipcRenderer.send(IPC.visibleChats, pks),
+  onVisibleChatsChanged: cb => {
+    const listener = (_e: IpcRendererEvent, shown: VisibleChats) => cb(shown)
+    ipcRenderer.on(IPC.visibleChatsChanged, listener)
+    return () => { ipcRenderer.off(IPC.visibleChatsChanged, listener) }
+  },
   onAppDialog: cb => {
     const listener = (_e: IpcRendererEvent, request: AppDialogRequest) => cb(request)
     ipcRenderer.on(IPC.appDialogAsk, listener)
@@ -40,6 +49,23 @@ const api: DelegattoApi & EngineApi = {
     const listener = (_e: IpcRendererEvent, p: IndexProgress) => cb(p)
     ipcRenderer.on(IPC.indexProgress, listener)
     return () => { ipcRenderer.off(IPC.indexProgress, listener) }
+  },
+  splitViewOpen: (layout, panes) => ipcRenderer.invoke(IPC.splitViewOpen, layout, panes),
+  splitViewGet: () => ipcRenderer.invoke(IPC.splitViewGet),
+  splitViewSetLayout: (layout, panes) => ipcRenderer.invoke(IPC.splitViewSetLayout, layout, panes),
+  splitViewSetPane: (index, pane) => ipcRenderer.invoke(IPC.splitViewSetPane, index, pane),
+  splitViewSetRatios: (layout, ratios) => ipcRenderer.invoke(IPC.splitViewSetRatios, layout, ratios),
+  splitViewSwap: (a, b) => ipcRenderer.invoke(IPC.splitViewSwap, a, b),
+  onSplitViewChanged: cb => {
+    const listener = (_e: IpcRendererEvent, state: SplitState | null) => cb(state)
+    ipcRenderer.on(IPC.splitViewChanged, listener)
+    return () => { ipcRenderer.off(IPC.splitViewChanged, listener) }
+  },
+  focusMain: action => ipcRenderer.send(IPC.focusMain, action),
+  onMainAction: cb => {
+    const listener = (_e: IpcRendererEvent, action: MainAction) => cb(action)
+    ipcRenderer.on(IPC.mainAction, listener)
+    return () => { ipcRenderer.off(IPC.mainAction, listener) }
   },
 
   listChannels: () => ipcRenderer.invoke(IPC.listChannels),
@@ -67,6 +93,11 @@ const api: DelegattoApi & EngineApi = {
   saveImage: (cwd, relPath, dataUrl) => ipcRenderer.invoke(IPC.saveImage, cwd, relPath, dataUrl),
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   updateSettings: patch => ipcRenderer.invoke(IPC.updateSettings, patch),
+  onAppSettingsChanged: cb => {
+    const listener = (_e: IpcRendererEvent, settings: AppSettings) => cb(settings)
+    ipcRenderer.on(IPC.settingsChanged, listener)
+    return () => { ipcRenderer.off(IPC.settingsChanged, listener) }
+  },
   listThemes: () => ipcRenderer.invoke(IPC.listThemes),
   listLocalThemes: () => ipcRenderer.invoke(IPC.listLocalThemes),
   openLocalThemes: () => ipcRenderer.invoke(IPC.openLocalThemes),
@@ -127,6 +158,8 @@ const api: DelegattoApi & EngineApi = {
   sideQuestion: (sessionPk, question) => ipcRenderer.invoke(ENGINE_IPC.sideQuestion, sessionPk, question),
   setChatMode: (sessionPk, mode) => ipcRenderer.invoke(ENGINE_IPC.setChatMode, sessionPk, mode),
   answerElicitation: (sessionPk, requestId, answer) => ipcRenderer.invoke(ENGINE_IPC.answerElicitation, sessionPk, requestId, answer),
+  pendingPermissions: () => ipcRenderer.invoke(ENGINE_IPC.pendingPermissions),
+  pendingQuestions: () => ipcRenderer.invoke(ENGINE_IPC.pendingQuestions),
   onEvent: cb => {
     const listener = (_e: IpcRendererEvent, sessionPk: number, ev: LiveEvent) => cb(sessionPk, ev)
     ipcRenderer.on(ENGINE_IPC.event, listener)
@@ -311,7 +344,6 @@ const sync: SyncApi = {
   syncResolveConflict: id => ipcRenderer.invoke(SYNC_IPC.resolveConflict, id),
   syncChatInfo: pk => ipcRenderer.invoke(SYNC_IPC.chatInfo, pk),
   syncBeforeSend: pk => ipcRenderer.invoke(SYNC_IPC.beforeSend, pk),
-  syncChatOpened: pk => ipcRenderer.send(SYNC_IPC.chatOpened, pk),
   syncRemoveFromGithub: id => ipcRenderer.invoke(SYNC_IPC.removeFromGithub, id),
   syncStartFresh: () => ipcRenderer.invoke(SYNC_IPC.startFresh),
   syncRecoveryKey: () => ipcRenderer.invoke(SYNC_IPC.recoveryKey),

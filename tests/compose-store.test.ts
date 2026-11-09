@@ -21,7 +21,7 @@ describe('what is being composed in each chat', () => {
   it('keeps each chat separate and unchanged while another is open', () => {
     const { store } = setup()
     store.update(1, s => ({ ...s, images: [image] }))
-    store.setOpen(2)
+    store.markOpen(2)
     expect(store.get(1).images).toEqual([image])
     expect(store.get(2).images).toEqual([])
   })
@@ -46,7 +46,7 @@ describe('what is being composed in each chat', () => {
     const { store, event } = setup()
     store.dispatch(1, { type: 'add', msg: queued('a', 'u1') })
     store.dispatch(1, { type: 'add', msg: queued('b', 'u2') })
-    store.setOpen(2)
+    store.markOpen(2)
     event(1, lifecycle('started', 'u1'))
     expect(store.get(1).queue.map(m => m.id)).toEqual(['b'])
     event(1, exit)
@@ -56,7 +56,7 @@ describe('what is being composed in each chat', () => {
   it('keeps a message Claude Code dropped while its chat is not on screen', () => {
     const { store, event } = setup()
     store.dispatch(1, { type: 'add', msg: queued('a', 'u1') })
-    store.setOpen(2)
+    store.markOpen(2)
     event(1, lifecycle('cancelled', 'u1'))
     expect(store.get(1).queue[0]).toMatchObject({ id: 'a', uuid: null })
   })
@@ -64,7 +64,7 @@ describe('what is being composed in each chat', () => {
   it('leaves a dropped message to the box when its chat is on screen', () => {
     const { store, event } = setup()
     store.dispatch(1, { type: 'add', msg: queued('a', 'u1') })
-    store.setOpen(1)
+    store.markOpen(1)
     event(1, lifecycle('cancelled', 'u1'))
     expect(store.get(1).queue[0]!.uuid).toBe('u1')
   })
@@ -73,7 +73,7 @@ describe('what is being composed in each chat', () => {
     const { store, ran, event } = setup()
     store.dispatch(1, { type: 'add', msg: queued('a', null, '!whoami') })
     store.dispatch(1, { type: 'add', msg: queued('b', null, '!later') })
-    store.setOpen(2)
+    store.markOpen(2)
     event(1, result)
     expect(ran).toEqual([[1, 'whoami']])
     expect(store.get(1).queue.map(m => m.id)).toEqual(['b'])
@@ -82,7 +82,7 @@ describe('what is being composed in each chat', () => {
   it('leaves everything else for when the chat is opened', () => {
     const { store, ran, event } = setup()
     store.dispatch(1, { type: 'add', msg: queued('a', null, '/context') })
-    store.setOpen(2)
+    store.markOpen(2)
     event(1, result)
     expect(ran).toEqual([])
     expect(store.get(1).queue).toHaveLength(1)
@@ -91,9 +91,72 @@ describe('what is being composed in each chat', () => {
   it('leaves a queued ! to the box when its chat is on screen', () => {
     const { store, ran, event } = setup()
     store.dispatch(1, { type: 'add', msg: queued('a', null, '!whoami') })
-    store.setOpen(1)
+    store.markOpen(1)
     event(1, result)
     expect(ran).toEqual([])
+  })
+
+  it('keeps a chat open while any view of it is mounted', () => {
+    const store = new ComposeStore()
+    const a = store.markOpen(5); const b = store.markOpen(5)
+    a()
+    expect(store.isOpen(5)).toBe(true)
+    b()
+    expect(store.isOpen(5)).toBe(false)
+  })
+
+  it('leaves the other pane chat open when one pane closes', () => {
+    const store = new ComposeStore()
+    const close5 = store.markOpen(5); store.markOpen(6)
+    close5()
+    expect(store.isOpen(6)).toBe(true)
+  })
+
+  it('holds a cancelled message only for chats not on screen in any pane', () => {
+    const { store, event } = setup()
+    store.dispatch(6, { type: 'add', msg: queued('a', 'u6') })
+    store.dispatch(7, { type: 'add', msg: queued('b', 'u7') })
+    store.markOpen(6)
+    event(6, lifecycle('cancelled', 'u6'))
+    event(7, lifecycle('cancelled', 'u7'))
+    expect(store.get(6).queue[0]!.uuid).toBe('u6')
+    expect(store.get(7).queue[0]).toMatchObject({ id: 'b', uuid: null })
+  })
+
+  it('gives a chat shown twice exactly one box that takes its returned and held messages', () => {
+    const store = new ComposeStore()
+    const first = {}, second = {}
+    const closeFirst = store.markOpen(5, first)
+    store.markOpen(5, second)
+    // The first box opened leads until another is focused.
+    expect(store.isLead(5, first)).toBe(true)
+    expect(store.isLead(5, second)).toBe(false)
+    store.focusBox(5, second)
+    expect(store.isLead(5, first)).toBe(false)
+    expect(store.isLead(5, second)).toBe(true)
+    // The focused one closing hands it back to the first still open.
+    store.focusBox(5, first)
+    closeFirst()
+    expect(store.isLead(5, second)).toBe(true)
+    // A box that isn't open for the chat never leads it.
+    expect(store.isLead(5, first)).toBe(false)
+    expect(store.isLead(6, second)).toBe(false)
+  })
+
+  it('hands a returned message to one box only', () => {
+    const store = new ComposeStore()
+    store.returnMessage(5, { text: 'hello', images: [] })
+    expect(store.takeReturned(5)).toBe('hello')
+    expect(store.takeReturned(5)).toBeNull()
+    expect(store.get(5).returned).toBeNull()
+  })
+
+  it('lets only one box take a held message', () => {
+    const store = new ComposeStore()
+    store.dispatch(5, { type: 'add', msg: queued('a', null) })
+    expect(store.claimHeld(5, 'a')).toBe(true)
+    expect(store.claimHeld(5, 'a')).toBe(false)
+    expect(store.get(5).queue).toEqual([])
   })
 
   it('finds what is held and reads ! commands', () => {

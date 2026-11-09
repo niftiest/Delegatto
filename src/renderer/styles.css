@@ -861,6 +861,12 @@ body { margin:0; background:var(--bg); color:var(--tx);
 .app-dialog-detail { margin:0 0 12px; color:var(--txt); font-size:13.5px; line-height:1.45; }
 .app-dialog-items { margin:0 0 12px; padding:8px 12px; list-style:none; background:var(--rail); border-radius:4px;
   color:var(--tx); font-size:13px; overflow-wrap:anywhere; }
+.app-dialog-choices { border:0; padding:0; min-width:0; }
+.app-dialog-choices .field-label { padding:0; }
+.app-dialog-checklist { display:flex; flex-direction:column; gap:8px; padding:10px 12px; background:var(--rail);
+  border:1px solid var(--line); border-radius:4px; }
+.app-dialog-checklist .field-checkbox span { overflow-wrap:anywhere; }
+.modal.app-dialog select.field-input { cursor:pointer; }
 .modal-error { background:color-mix(in srgb, var(--bad) 12%, transparent); border:1px solid color-mix(in srgb, var(--bad) 40%, transparent); color:var(--danger-text);
   border-radius:4px; padding:8px 10px; font-size:12.5px; margin-bottom:14px; }
 .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:4px; }
@@ -1619,3 +1625,89 @@ html[data-custom-font] body *:not(pre):not(pre *):not(code) { font-family:var(--
 .sync-advanced[open] > summary { margin-bottom:10px; }
 .composer-syncing-body { display:flex; flex-direction:column; gap:6px; flex:1; min-width:0; }
 .composer-syncing .sync-progress { margin-top:0; }
+
+/* The split window: a slim strip, then 2 to 4 chats in a grid. The 1px gap shows the
+   grid's own background as the line between panes. */
+.split-shell { display:flex; flex-direction:column; height:100vh; overflow:hidden; background:var(--bg); }
+.split-strip { flex:none; height:34px; display:flex; align-items:center; gap:10px; padding:0 10px;
+  background:var(--s1); border-bottom:1px solid var(--line); }
+.split-strip-layout { flex:none; display:flex; align-items:center; justify-content:center; width:32px; height:24px; padding:0;
+  border:1px solid var(--line); border-radius:4px; background:var(--s2); color:var(--tx); cursor:pointer; }
+.split-strip-layout:hover:not(:disabled) { border-color:var(--accent); }
+.split-strip-layout:disabled { opacity:.5; cursor:default; }
+.split-strip-layout svg { display:block; width:18px; height:14px; }
+.split-strip-title { min-width:0; flex:1; font-size:12.5px; font-weight:600; color:var(--mu);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.split-grid { position:relative; flex:1; min-height:0; display:grid; gap:1px; background:var(--line); overflow:hidden; }
+.split-pane { position:relative; display:flex; min-width:360px; min-height:280px; overflow:hidden; background:var(--bg); }
+.split-pane.focused::after { content:''; position:absolute; inset:0; border:2px solid var(--accent); pointer-events:none; z-index:7; }
+.split-pane-main { min-height:0; }
+.split-empty { align-items:center; justify-content:center; }
+/* An empty slot's one button, in the middle of the pane. */
+.split-select-project { display:inline-flex; align-items:center; gap:8px; padding:14px 26px; border-radius:8px; font-size:15px; }
+.split-select-project svg { display:block; width:16px; height:16px; }
+.split-select-project:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+/* Dragging a pane by its name: it dims, and the slot it would land in is outlined and says what happens. */
+.split-pane-grip { display:inline-flex; align-items:center; gap:6px; min-width:0; cursor:grab; touch-action:none; user-select:none; }
+.split-shell.pane-dragging, .split-shell.pane-dragging * { cursor:grabbing !important; user-select:none !important; }
+.split-pane.dragging > :not(.split-drop-overlay) { opacity:.45; }
+.split-drop-overlay { position:absolute; inset:0; z-index:9; display:flex; align-items:center; justify-content:center; pointer-events:none;
+  background:color-mix(in srgb, var(--accent) 14%, transparent); border:2px dashed var(--accent); }
+.split-drop-overlay span { padding:8px 18px; border-radius:8px; background:var(--accent); color:var(--on-accent); font-size:14px; font-weight:700;
+  box-shadow:0 6px 18px color-mix(in srgb, #000 30%, transparent); }
+.split-divider { position:absolute; z-index:8; }
+.split-divider-col { width:6px; }
+.resizer-h { width:auto; height:5px; cursor:row-resize; }
+.split-divider-row { height:6px; }
+/* The pane's one header row: project and chat, the chat's controls, then the pane's buttons. */
+.chead-compact { padding:6px 10px; gap:6px 8px; }
+.chead-compact-start { display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 160px; }
+.split-pane-title { display:flex; align-items:center; gap:6px; min-width:0; }
+.split-pane-icon { flex:none; width:22px; height:22px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center;
+  overflow:hidden; font-size:10.5px; font-weight:700; color:#fff; }
+.split-pane-icon.emoji { background:var(--s3); font-size:14px; }
+.split-pane-icon img { width:100%; height:100%; object-fit:cover; }
+.split-pane-name { min-width:0; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13.5px; font-weight:700; color:var(--tx); }
+.split-chat-select { min-width:0; max-width:200px; }
+.split-pane-buttons { flex:none; display:flex; align-items:center; gap:2px; margin-left:auto; }
+.split-pane-btn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:26px; padding:0; border:0; border-radius:4px;
+  background:transparent; color:var(--mu); cursor:pointer; }
+.split-pane-btn:hover:not(:disabled) { background:var(--s2); color:var(--tx); }
+.split-pane-btn.on { background:var(--s3); color:var(--tx); }
+.split-pane-btn:disabled { opacity:.4; cursor:default; }
+.split-pane-btn svg { display:block; width:15px; height:15px; }
+/* The context rail over the chat, below the pane's header, when its button is on. */
+.split-rail-overlay { position:absolute; right:0; bottom:0; top:0; z-index:6; display:flex; max-width:100%;
+  box-shadow:-6px 0 18px color-mix(in srgb, #000 28%, transparent); }
+.split-rail-overlay[hidden] { display:none; }/* A pane's own dialogs fill that pane rather than the window. */
+.split-dialog-host { display:contents; }
+.split-dialog-host > .modal-overlay { position:absolute; inset:0; }.split-dialog-host > .modal-overlay > .modal { max-width:calc(100% - 24px); max-height:calc(100% - 24px); overflow:auto; }
+/* The split view button and its dropdown of layouts. */
+.layout-menu { position:relative; flex:none; align-self:center; }
+.layout-menu-pop { position:absolute; top:calc(100% + 6px); z-index:30; display:flex; gap:6px; padding:8px;
+  background:var(--s2); border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px color-mix(in srgb, var(--shadow) 35%, transparent); }
+.layout-menu-header .layout-menu-pop { right:0; }
+.layout-menu-strip .layout-menu-pop { left:0; }
+.layout-menu-item { width:52px; height:40px; display:flex; align-items:center; justify-content:center; padding:0;
+  border:1px solid var(--line); border-radius:6px; background:var(--s1); color:var(--mu); cursor:pointer; }
+.layout-menu-item:hover, .layout-menu-item:focus-visible { border-color:var(--accent); color:var(--tx); outline:none; }
+.layout-menu-item.current { border-color:var(--accent); color:var(--tx); background:color-mix(in srgb, var(--accent) 16%, var(--s1)); }
+.layout-menu-item svg { display:block; width:36px; height:27px; }
+.layout-glyph rect.on { fill:var(--accent); stroke:var(--accent); }
+/* The slot picker: one pane at a time, the layout's picture marking which. */
+.slot-picker-overlay { z-index:1500; }
+.modal.slot-picker { width:520px; display:flex; flex-direction:column; overflow:hidden; }
+.slot-picker-head { display:flex; align-items:center; gap:14px; margin-bottom:12px; }
+.slot-picker-thumb { flex:none; width:64px; height:48px; color:var(--mu); }
+.slot-picker-heading .modal-title { margin:0; }
+.slot-picker-step { margin-top:2px; font-size:12.5px; color:var(--mu); }
+.slot-picker-search { margin-bottom:10px; }
+.slot-picker-list { flex:1 1 auto; min-height:120px; max-height:360px; overflow-y:auto; margin-bottom:12px; }
+.slot-picker-section-title { padding:8px 6px 4px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.02em; color:var(--mu); }
+.slot-picker-row { display:flex; align-items:center; gap:8px; width:100%; padding:6px; border:0; border-radius:6px; background:none;
+  color:var(--tx); font:inherit; font-size:13.5px; text-align:left; cursor:pointer; }
+.slot-picker-row.active { background:var(--s3); }
+.slot-picker-row:disabled { cursor:default; opacity:.6; }
+.slot-picker-name { flex:none; max-width:55%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.slot-picker-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:11px; color:var(--mu); }
+.slot-picker-empty { padding:16px 6px; font-size:13px; color:var(--mu); }

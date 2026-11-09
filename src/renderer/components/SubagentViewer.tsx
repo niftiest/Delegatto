@@ -1,6 +1,8 @@
 import { createContext, useEffect, useState } from 'react'
 import { api } from '../api'
 import { Transcript } from './Transcript'
+import { useDialogTarget } from './DialogHost'
+import { escapeIsFor } from '../escape-scope'
 import type { RenderItem, SessionSummary } from '../../shared/types'
 
 /** Lets a tool card deep in a transcript open what a subagent did. */
@@ -13,6 +15,8 @@ export function isAgentTool(name: string): boolean {
 
 /** A subagent's own transcript, read-only, over the chat that ran it. */
 export function SubagentViewer({ toolUseId, onClose }: { toolUseId: string; onClose: () => void }) {
+  // In a split pane, only an Esc pressed in this pane closes it.
+  const dialogTarget = useDialogTarget()
   const [agent, setAgent] = useState<SessionSummary | null | 'loading'>('loading')
   const [items, setItems] = useState<RenderItem[]>([])
   const [oldestSeq, setOldestSeq] = useState<number | null>(null)
@@ -34,10 +38,10 @@ export function SubagentViewer({ toolUseId, onClose }: { toolUseId: string; onCl
       if (!alive) return
       setItems(page.items); setOldestSeq(page.oldestSeq); setHasMore(page.hasMore)
     })()
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && escapeIsFor(dialogTarget, e)) onClose() }
     window.addEventListener('keydown', onKey)
     return () => { alive = false; window.removeEventListener('keydown', onKey) }
-  }, [toolUseId, onClose])
+  }, [toolUseId, onClose, dialogTarget])
 
   const loadOlder = (): void => {
     if (agent === null || agent === 'loading' || !hasMore || loadingOlder || oldestSeq === null) return

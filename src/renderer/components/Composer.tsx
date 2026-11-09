@@ -77,10 +77,13 @@ function lockHolder(lock: ExternalLock): string {
   return `${who} (PID ${lock.pid})`
 }
 
-export function Composer({ sessionPk, running, settled = false, shellStops = 0, onCycleMode, lock = null, syncing = null, cwd = null, suggestion = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange }: {
+export function Composer({ sessionPk, running, focused = true, settled = false, shellStops = 0, onCycleMode, lock = null, syncing = null, cwd = null, suggestion = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange }: {
   /** True while a turn is in flight for this session. Enter queues instead
    *  of sending, and Esc interrupts, only while this is true. */
   running: boolean
+  /** The pane the user is working in. With the same chat shown twice, the focused box is the
+   *  one that takes a message coming back and sends what's held (see composeStore.isLead). */
+  focused?: boolean
   /** True once `running` and `lock` describe this chat, rather than the moment of opening it. */
   settled?: boolean
   /** Shift+Tab, as in the terminal. Answers with the mode it moved to. */
@@ -139,10 +142,11 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
   function dispatchQueue(action: QueueAction) {
     composeStore.dispatch(sessionPk, action)
   }
-  useEffect(() => {
-    composeStore.setOpen(sessionPk)
-    return () => composeStore.setOpen(null)
-  }, [sessionPk])
+  // Names this box to the store, so only one box for a chat shown twice drains it.
+  const box = useRef({}).current
+  useEffect(() => composeStore.markOpen(sessionPk, box), [sessionPk, box])
+  useEffect(() => { if (focused) composeStore.focusBox(sessionPk, box) }, [focused, sessionPk, box])
+  const isLead = (): boolean => composeStore.isLead(sessionPk, box)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
 
@@ -235,7 +239,8 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
   // merely "is false") is what fires the next send, so a component that mounts already
   // idle doesn't spuriously fire on mount.
   function sendHeld(next: QueuedMessage) {
-    dispatchQueue({ type: 'remove', id: next.id })
+    // Another box for this chat sends it, or already has.
+    if (!isLead() || !composeStore.claimHeld(sessionPk, next.id)) return
     const command = shellCommandOf(next.text)
     if (command !== null && onShellCommand !== undefined) onShellCommand(command)
     else onSend(next.text, next.images, [])
@@ -289,16 +294,20 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
     return () => clearTimeout(timer)
   }, [queueNote])
   // A message that never reached Claude comes back ahead of anything typed since.
+  // With the chat shown twice, only one box takes it.
   useEffect(() => {
-    if (returned === null || returned === undefined) return
-    composeStore.update(sessionPk, s => ({ ...s, returned: null }))
-    updateText([returned, textRef.current].filter(s => s.trim().length > 0).join('\n'))
-    textareaRef.current?.focus()
+    if (returned === null || returned === undefined || !isLead()) return
+    const back = composeStore.takeReturned(sessionPk)
+    if (back === null) return
+    updateText([back, textRef.current].filter(s => s.trim().length > 0).join('\n'))
+    // Only the pane the user is in takes the cursor, so it never jumps to another pane.
+    if (focused) textareaRef.current?.focus()
   }, [returned]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => api.onEvent((pk, ev) => {
     if (pk !== sessionPk || ev.kind !== 'commandLifecycle') return
-    if (ev.state === 'cancelled' && !withdrawing.current.has(ev.uuid)) {
-      // Dropped by something other than this queue: it mustn't simply vanish.
+    if (ev.state === 'cancelled' && !withdrawing.current.has(ev.uuid) && isLead()) {
+      // Dropped by something other than this queue: it mustn't simply vanish. With the chat
+      // shown twice, one box puts it back.
       const lost = queueRef.current.find(m => m.uuid === ev.uuid)
       if (lost !== undefined) putInBox(lost)
     }
@@ -321,7 +330,7 @@ export function Composer({ sessionPk, running, settled = false, shellStops = 0, 
     dispatchQueue({ type: 'remove', id: m.id })
     updateText([m.text, textRef.current].map(s => s.trim()).filter(s => s.length > 0).join('\n'))
     if (m.images.length > 0) setImageChips(prev => [...m.images, ...prev])
-    textareaRef.current?.focus()
+    if (focused) textareaRef.current?.focus()
   }
 
   const editingQueued = useRef(false)

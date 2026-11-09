@@ -23,7 +23,10 @@ const user = (uuid: string, parentUuid: string | null, text: string): object => 
 const assistant = (uuid: string, parentUuid: string, text: string): object => ({ type: 'assistant', uuid, parentUuid, sessionId: 's', cwd: dir, timestamp: ts, message: { role: 'assistant', model: 'm', content: [{ type: 'text', text }] } })
 const toolUse = (uuid: string, parentUuid: string): object => ({ type: 'assistant', uuid, parentUuid, sessionId: 's', cwd: dir, timestamp: ts, message: { role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } })
 const toolResult = (uuid: string, parentUuid: string): object => ({ type: 'user', uuid, parentUuid, sessionId: 's', cwd: dir, timestamp: ts, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] } })
-const leaf = (leafUuid: string): object => ({ type: 'last-prompt', lastPrompt: 'x', leafUuid, sessionId: 's' })
+// A rewind's note, as Claude Code writes it: marked explicit.
+const leaf = (leafUuid: string): object => ({ type: 'last-prompt', lastPrompt: 'x', leafUuid, explicit: true, rewound: true, sessionId: 's' })
+// The routine note a Claude writes as it works, which Claude Code doesn't resume by.
+const routineNote = (leafUuid: string): object => ({ type: 'last-prompt', lastPrompt: 'x', leafUuid, sessionId: 's' })
 
 async function indexed(rows: object[]) {
   const file = join(dir, 's.jsonl')
@@ -43,6 +46,24 @@ const REWOUND = [
   leaf('a1'),
   user('u3', 'a1', 'third'), assistant('a4', 'u3', 'reply three')
 ]
+
+// Another PC's Claude, closing, notes where it was: before this PC's newest turn arrived.
+const TWO_PCS = [
+  user('u1', null, 'first'), assistant('a1', 'u1', 'reply one'),
+  user('u2', 'a1', 'from the other PC'), assistant('a2', 'u2', 'reply two'),
+  routineNote('a1')
+]
+
+describe('a routine resume note pointing back', () => {
+  it('hides nothing, as Claude Code goes on from the newest message too', async () => {
+    expect(await (await indexed(TWO_PCS)).shown()).toEqual(['u1', 'a1', 'u2', 'a2'])
+  })
+
+  it('leaves a real rewind as it was', async () => {
+    const { shown } = await indexed([...REWOUND, routineNote('a3')])
+    expect(await shown()).toEqual(['u1', 'a1', 'u3', 'a4'])
+  })
+})
 
 describe('a chat after a rewind', () => {
   it('leaves out everything the rewind went past', async () => {

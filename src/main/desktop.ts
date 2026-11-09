@@ -1,4 +1,4 @@
-import { app, Menu, Notification, Tray, nativeImage, type BrowserWindow } from 'electron'
+import { app, BrowserWindow, Menu, Notification, Tray, nativeImage } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Catalog } from './catalog/db'
@@ -7,6 +7,8 @@ import { getChannelMeta } from './catalog/metadata'
 import { classifyEvent, classifyPermission, notificationBody, shouldNotify, type NotifyKind } from './notify-rules'
 import type { LiveEvent, PermissionRequest } from '../shared/engine-types'
 import { CLAUDE_SETTINGS_IPC } from '../shared/claude-settings-types'
+import type { WindowHub } from './window-hub'
+import { suppressNotification } from './notify-visibility'
 
 /** Desktop integration: notifications for chats that need you while
  *  Delegatto isn't in front, and the tray icon (close to tray, start
@@ -30,7 +32,7 @@ export type Desktop = {
   dispose(): void
 }
 
-export function createDesktop(db: Catalog, getWindow: () => BrowserWindow | null, opts: { quit: () => void }): Desktop {
+export function createDesktop(db: Catalog, hub: WindowHub, opts: { quit: () => void }): Desktop {
   let tray: Tray | null = null
   // One notification per chat per few seconds: a failing turn sends both an
   // error result and a non-zero exit.
@@ -48,19 +50,34 @@ export function createDesktop(db: Catalog, getWindow: () => BrowserWindow | null
     return { title: chat !== null ? `${project} · ${chat.length > 60 ? chat.slice(0, 57) + '…' : chat}` : project, dirName: row.dirName }
   }
 
-  const showWindow = (): void => {
-    const w = getWindow()
-    if (w === null || w.isDestroyed()) return
+  const bringUp = (w: BrowserWindow | null): BrowserWindow | null => {
+    if (w === null || w.isDestroyed()) return null
     if (w.isMinimized()) w.restore()
     w.show()
     w.focus()
+    return w
+  }
+  const showWindow = (): void => { bringUp(hub.main()) }
+
+  /** The window showing this chat, or else the main window, where it opens. */
+  const windowFor = (sessionPk: number): BrowserWindow | null => {
+    for (const id of hub.visibility.windowsShowing(sessionPk)) {
+      const w = BrowserWindow.fromId(id)
+      if (w !== null && !w.isDestroyed() && hub.fromContents(w.webContents) === w) return w
+    }
+    return hub.main()
+  }
+
+  /** The focused window's id, when it's one of ours. */
+  const focusedWindowId = (): number | null => {
+    const focused = BrowserWindow.getFocusedWindow()
+    if (focused === null || focused.isDestroyed() || focused.isMinimized()) return null
+    return hub.fromContents(focused.webContents) !== null ? focused.id : null
   }
 
   const notify = (sessionPk: number, kind: NotifyKind, detail: { text?: string; tool?: string }): void => {
-    const w = getWindow()
-    if (w === null || w.isDestroyed()) return
-    // In front and visible: the app itself shows it.
-    if (w.isVisible() && w.isFocused() && !w.isMinimized()) return
+    // On screen in the window the user is in: the chat itself shows it.
+    if (suppressNotification(sessionPk, focusedWindowId(), hub.visibility)) return
     if (!Notification.isSupported() || !shouldNotify(kind, getSettings(db), new Date())) return
     const now = Date.now()
     if (now - (lastShown.get(sessionPk) ?? 0) < 5000) return
@@ -73,9 +90,8 @@ export function createDesktop(db: Catalog, getWindow: () => BrowserWindow | null
       ...(icon !== undefined ? { icon } : {})
     })
     n.on('click', () => {
-      showWindow()
-      const target = getWindow()
-      if (who !== null && target !== null && !target.isDestroyed()) target.webContents.send(CLAUDE_SETTINGS_IPC.openChat, sessionPk, who.dirName)
+      const target = bringUp(windowFor(sessionPk))
+      if (who !== null && target !== null) target.webContents.send(CLAUDE_SETTINGS_IPC.openChat, sessionPk, who.dirName)
     })
     n.show()
   }

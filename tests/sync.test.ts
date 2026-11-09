@@ -539,6 +539,25 @@ describe('syncing between two PCs', () => {
     expect(got).toEqual([40, 100])
   })
 
+  it('points paths into Claude’s own folder for the project at this PC’s, whose name follows the project’s folder', async () => {
+    const a = makePc('PC-A')
+    const made = await a.service.setupNew({ name: 'delegatto-sync', encrypted: true })
+    const rootA = a.tree.workDir('SockProxy')
+    const sid = randomUUID()
+    const memoryA = join(a.tree.paths.claudeDir, 'projects', encodePath(rootA), 'memory', 'MEMORY.md')
+    a.tree.addSessionRaw(rootA, sid, userRow(rootA, sid, `read ${memoryA} and the code in ${rootA}.`), assistantRow(rootA, sid, 'done'))
+    await ok(a.service.enableProject(rootA, NO_DECISIONS))
+    const b = makePc('PC-B')
+    await b.service.setupExisting({ name: 'delegatto-sync', recoveryKey: made.ok ? made.recoveryKey! : '' })
+    const projectId = (await b.service.status()).remoteProjects[0]!.projectId
+    const rootB = join(base, 'elsewhere', 'HotspotProxy')
+    expect((await b.service.linkProject(projectId, rootB)).ok).toBe(true)
+    const memoryB = join(b.tree.paths.claudeDir, 'projects', encodePath(rootB), 'memory', 'MEMORY.md')
+    const said = textsOf(chatFile(b, rootB, sid)).join('\n')
+    expect(said).toContain(`read ${memoryB} and the code in ${rootB}.`)
+    expect(said).not.toContain(encodePath(rootA))
+  })
+
   it('reports each step of setting a project up on another PC, counting its chats in', async () => {
     const a = makePc('PC-A')
     const made = await a.service.setupNew({ name: 'delegatto-sync', encrypted: true })
@@ -561,6 +580,22 @@ describe('syncing between two PCs', () => {
     expect(packs.every(p => p.total === 2)).toBe(true)
     expect(seen.findIndex(p => p.phase === 'pack')).toBeGreaterThan(seen.findIndex(p => p.phase === 'download'))
     expect(seen.every(p => p.workingDir.toLowerCase() === rootB.toLowerCase())).toBe(true)
+  })
+
+  it('waits for a chat’s Claude process to actually exit before adding messages to it', async () => {
+    const { a, b, rootA, rootB, sid } = await pair()
+    appendFileSync(chatFile(a, rootA, sid), `${userRow(rootA, sid, 'from A')}\n`)
+    await ok(a.service.syncNow())
+    // B's app has let go of the process, but the process itself is still closing.
+    b.open.add(sid)
+    let alive = 3
+    const svc = b.service as unknown as { deps: { chatPid?: (id: string) => number | null; processAlive?: (pid: number) => boolean } }
+    svc.deps.chatPid = () => 4242
+    svc.deps.processAlive = () => alive-- > 0
+    await ok(b.service.syncNow())
+    expect(b.stopped).toContain(sid)
+    expect(alive).toBeLessThan(0)
+    expect(textsOf(chatFile(b, rootB, sid))).toContain('from A')
   })
 
   it('says which chat is getting messages from which PC, counts them in, then lets go', async () => {
@@ -820,7 +855,7 @@ describe('likely secrets', () => {
 describe('other PCs and project code', () => {
   it('shows which PC has a chat open, by name, and when it was last seen', async () => {
     const { a, b, sid, rootB } = await pair()
-    a.service.chatOpened(sid)
+    a.service.chatsOpened([sid])
     await a.service.syncNow()
     await b.service.tick()
     await b.service.tick()
@@ -834,12 +869,57 @@ describe('other PCs and project code', () => {
     a.service.setDeviceName('Office PC')
     await a.service.syncNow()
     const before = git(bare, 'rev-list', '--count', 'main')
-    a.service.chatOpened(sid)
+    a.service.chatsOpened([sid])
     await a.service.syncNow()
-    a.service.chatOpened(null)
+    a.service.chatsOpened([])
     await a.service.syncNow()
     expect(git(bare, 'rev-list', '--count', 'main')).toBe(before)
     expect(git(bare, 'for-each-ref', '--format=%(refname)', 'refs/heads/presence')).toMatch(/refs\/heads\/presence\//)
+  })
+
+  it('tells the other PC every chat open here, and drops only the ones closed', async () => {
+    const { a, b, rootA, rootB, sid } = await pair()
+    const sid2 = randomUUID()
+    a.tree.addSessionRaw(rootA, sid2, userRow(rootA, sid2, 'second'))
+    await ok(a.service.syncNow())
+    await ok(b.service.syncNow())
+
+    // Two windows, each showing one chat: presence carries both.
+    a.service.chatsOpened([sid, sid2])
+    await a.service.syncNow()
+    await b.service.tick()
+    await b.service.tick()
+    expect((await b.service.status()).devices.find(d => d.name === 'PC-A')?.openChats).toEqual([sid, sid2])
+    expect((await b.service.chatInfo(sid, rootB)).elsewhere).toMatchObject({ device: 'PC-A' })
+    expect((await b.service.chatInfo(sid2, rootB)).elsewhere).toMatchObject({ device: 'PC-A' })
+
+    // One window closes: only its chat goes.
+    a.service.chatsOpened([sid])
+    await a.service.syncNow()
+    await b.service.tick()
+    await b.service.tick()
+    expect((await b.service.status()).devices.find(d => d.name === 'PC-A')?.openChats).toEqual([sid])
+    expect((await b.service.chatInfo(sid2, rootB)).elsewhere).toBeNull()
+  })
+
+  it('closes every chat open here before applying incoming rows to it', async () => {
+    const { a, b, rootA, rootB, sid } = await pair()
+    const sid2 = randomUUID()
+    a.tree.addSessionRaw(rootA, sid2, userRow(rootA, sid2, 'second'))
+    await ok(a.service.syncNow())
+    await ok(b.service.syncNow())
+    expect(textsOf(chatFile(b, rootB, sid2))).toContain('second')
+
+    appendFileSync(chatFile(a, rootA, sid), `${userRow(rootA, sid, 'more one')}\n`)
+    appendFileSync(chatFile(a, rootA, sid2), `${userRow(rootA, sid2, 'more two')}\n`)
+    await ok(a.service.syncNow())
+    // Stopping runs off this app owning the chat's process (isChatOpen), not presence.
+    b.open.add(sid)
+    b.open.add(sid2)
+    await ok(b.service.syncNow())
+    expect([...b.stopped].sort()).toEqual([sid, sid2].sort())
+    expect(textsOf(chatFile(b, rootB, sid))).toContain('more one')
+    expect(textsOf(chatFile(b, rootB, sid2))).toContain('more two')
   })
 
   it('clones the project repo, follows its branch, and warns about what a clone can\'t have', async () => {

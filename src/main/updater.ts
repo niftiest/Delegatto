@@ -1,9 +1,11 @@
-import { app, ipcMain, net, powerMonitor, shell, type BrowserWindow } from 'electron'
+import { app, ipcMain, net, powerMonitor, shell } from 'electron'
+import type { WindowHub } from './window-hub'
 import { spawn } from 'node:child_process'
 import { autoUpdater } from 'electron-updater'
 import { canRestartForUpdate, nothingToInterrupt, settleForRestart, UPDATE_IPC, type RestartWork, type UpdateRestartMode, type UpdateState, type UpdateStatus } from '../shared/update-types'
 import { compareVersions } from '../shared/semver'
 import type { ResumeChat } from './update-resume'
+import { UpdateHolds } from './update-holds'
 import { downloadPortable, handoffArgs, pickPortableAsset, previousFromArgv, type PortableAsset } from './portable-update'
 
 /** Self-update. Installed (NSIS) builds use electron-updater against the
@@ -32,7 +34,7 @@ declare global {
 
 export type UpdaterHandle = { dispose(): void }
 
-export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => boolean; autoInstall: () => boolean; activeWork: () => number; activeChats: () => string[]; resumedChat: ResumeChat | null; saveForRestart: (chat: ResumeChat | null) => void }): UpdaterHandle {
+export function registerUpdater(hub: WindowHub, opts: { autoCheck: () => boolean; autoInstall: () => boolean; activeWork: () => number; activeChats: () => string[]; resumedChat: ResumeChat | null; saveForRestart: (chat: ResumeChat | null) => void }): UpdaterHandle {
   const channel: UpdateStatus['channel'] = !app.isPackaged ? 'dev'
     : process.env.PORTABLE_EXECUTABLE_DIR !== undefined ? 'portable' : 'installer'
   let state: UpdateState = channel === 'dev'
@@ -49,7 +51,7 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
   const set = (next: UpdateState): void => {
     state = next
     if (next.state === 'error' || (next.state === 'available' && next.reason !== undefined)) afterDownload = null
-    if (!window.isDestroyed()) window.webContents.send(UPDATE_IPC.status, status())
+    hub.send(UPDATE_IPC.status, status())
     if (next.state === 'ready' && afterDownload !== null) {
       const mode = afterDownload
       afterDownload = null
@@ -75,9 +77,9 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
 
   /** The downloaded exe waiting to take over (portable builds). */
   let portableExe: string | null = null
-  /** Something unsent in the window; only a person should lose that. */
-  let hold = false
-  const currentWork = (): RestartWork => ({ chats: opts.activeChats(), unsent: hold })
+  /** Something unsent in a window; only a person should lose that. Each window says for itself. */
+  const holds = new UpdateHolds()
+  const currentWork = (): RestartWork => ({ chats: opts.activeChats(), unsent: holds.held() })
   const stopWaiting = (): void => { waiting = null; quietSince = null }
   const broadcast = (): void => set(state)
 
@@ -110,7 +112,9 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
   function handOffToPortable(exe: string): void {
     const current = process.env.PORTABLE_EXECUTABLE_FILE
     if (current === undefined) return
-    const hidden = !window.isDestroyed() && (!window.isVisible() || window.isMinimized())
+    // The new version opens hidden if the main window is out of sight now.
+    const main = hub.main()
+    const hidden = main !== null && (!main.isVisible() || main.isMinimized())
     const env = { ...process.env }
     delete env.PORTABLE_EXECUTABLE_DIR
     delete env.PORTABLE_EXECUTABLE_FILE
@@ -191,7 +195,7 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
     afterDownload = mode
     await download()
   })
-  ipcMain.handle(UPDATE_IPC.setHold, (_e, value: unknown) => { hold = value === true })
+  ipcMain.handle(UPDATE_IPC.setHold, (e, value: unknown) => { holds.set(e.sender, value === true) })
   ipcMain.handle(UPDATE_IPC.work, () => currentWork())
   ipcMain.handle(UPDATE_IPC.setOpenChat, (_e, chat: ResumeChat | null) => { openChat = chat })
   ipcMain.handle(UPDATE_IPC.takeResumedChat, () => {
@@ -242,7 +246,7 @@ export function registerUpdater(window: BrowserWindow, opts: { autoCheck: () => 
       const autoInstall = opts.autoInstall()
       // Turned off means off: an installed build otherwise applies the update on quit.
       if (channel === 'installer') autoUpdater.autoInstallOnAppQuit = autoInstall
-      if (canRestartForUpdate({ autoInstall, ready: state.state === 'ready', unsent: hold, activeWork: opts.activeWork(), idleSeconds: powerMonitor.getSystemIdleTime() })) {
+      if (canRestartForUpdate({ autoInstall, ready: state.state === 'ready', unsent: holds.held(),activeWork: opts.activeWork(), idleSeconds: powerMonitor.getSystemIdleTime() })) {
         restartIntoUpdate()
       }
     }, IDLE_CHECK_EVERY_MS))

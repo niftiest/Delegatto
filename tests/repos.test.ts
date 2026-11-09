@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { openCatalog } from '../src/main/catalog/db'
-import { upsertProject, setProjectCwd, projectFolderFor, repairProjectCwds, upsertSession, listProjects, listSessions, listSubagents, sumTotalCostUsd } from '../src/main/catalog/repos'
+import { upsertProject, setProjectCwd, projectFolderFor, repairProjectCwds, upsertSession, listProjects, listSessions, listSubagents, sumTotalCostUsd, projectIdsOfSessions } from '../src/main/catalog/repos'
 import { search } from '../src/main/catalog/search'
 
 function seed() {
@@ -26,6 +26,17 @@ describe('repos', () => {
     db.prepare('UPDATE sessions SET input_tokens=? WHERE id=?').run(1_000_000, m)   // opus input: $4
     db.prepare('UPDATE sessions SET output_tokens=? WHERE id=?').run(1_000_000, a)  // sonnet output: $10
     expect(sumTotalCostUsd(db)).toBeCloseTo(14, 5)
+  })
+
+  it('projectIdsOfSessions gives the projects of the shown chats, once each, and skips unknown pks', () => {
+    const db = openCatalog(':memory:')
+    const p1 = upsertProject(db, 'C--one')
+    const p2 = upsertProject(db, 'C--two')
+    const a = upsertSession(db, { projectId: p1, sessionId: 'a', kind: 'main', filePath: '/f/a.jsonl', fileSize: 1, fileMtimeMs: 1 })
+    const b = upsertSession(db, { projectId: p1, sessionId: 'b', kind: 'main', filePath: '/f/b.jsonl', fileSize: 1, fileMtimeMs: 1 })
+    const c = upsertSession(db, { projectId: p2, sessionId: 'c', kind: 'main', filePath: '/f/c.jsonl', fileSize: 1, fileMtimeMs: 1 })
+    expect(projectIdsOfSessions(db, [a, b, c, 9999]).sort((x, y) => x - y)).toEqual([p1, p2].sort((x, y) => x - y))
+    expect(projectIdsOfSessions(db, [])).toEqual([])
   })
 
   it('sumTotalCostUsd is 0 for an empty catalog', () => {

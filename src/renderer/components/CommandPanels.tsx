@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogTarget } from './DialogHost'
+import { escapeIsFor } from '../escape-scope'
 import { api } from '../api'
 import { backgroundTaskLabel, taskHasOutput } from '../lib'
 import type { BackgroundTask } from '../../shared/engine-types'
@@ -10,17 +12,18 @@ import type { DiffFile, HookEntry, HookScope, HooksListing, WorkspaceDiff } from
 function PanelModal({ title, label, wide = false, onClose, children, actions }: {
   title: string; label: string; wide?: boolean; onClose: () => void; children: ReactNode; actions?: ReactNode
 }) {
+  const dialogTarget = useDialogTarget()
   useEffect(() => {
     // Ahead of everything else: behind this dialog, Esc would act on the message box.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || !escapeIsFor(dialogTarget, e)) return
       e.preventDefault()
       e.stopImmediatePropagation()
       onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, dialogTarget])
   return createPortal(
     <div className="modal-overlay app-dialog-overlay" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className={wide ? 'modal command-panel command-panel-wide' : 'modal command-panel'} role="dialog" aria-modal="true" aria-label={label}>
@@ -32,7 +35,7 @@ function PanelModal({ title, label, wide = false, onClose, children, actions }: 
         </div>
       </div>
     </div>,
-    document.body
+    dialogTarget
   )
 }
 

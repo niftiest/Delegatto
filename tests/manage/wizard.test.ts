@@ -102,6 +102,21 @@ describe('DeleteWizard, several projects', () => {
     expect((await w.plan({ scope: 'chat', sessionPk: pk })).title).toBe('Delete chat “Relay debugging”')
   })
 
+  it('keeps sync when a project delete leaves its chats, as when only its memory goes', async () => {
+    const t = tree()
+    const { a } = twoProjects(t)
+    const deleted: string[] = []
+    const w = new DeleteWizard(catalogWith([]), deps(t, [], { projectDeleted: wd => deleted.push(wd) }))
+    const target = { scope: 'project' as const, dirName: encodePath(a) }
+    const memory = (await w.plan(target)).items.filter(i => i.kind === 'Memory')
+    expect(memory).toHaveLength(1)
+    await w.execute(target, memory.map(i => i.key), false)
+    expect(deleted).toEqual([])
+    const all = (await w.plan(target)).items.filter(i => i.defaultSelected && i.containedIn === null)
+    await w.execute(target, all.map(i => i.key), false)
+    expect(deleted).toEqual([a])
+  })
+
   it('tells sync about each project it deleted, and only those', async () => {
     const t = tree()
     const { a, b } = twoProjects(t)

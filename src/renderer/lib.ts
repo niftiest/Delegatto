@@ -811,6 +811,7 @@ export function reduceLivePreview(prev: LivePreview | null, event: LiveEvent): L
     case 'permissionCancelled':
     case 'permissionGone':
     case 'elicitation':
+    case 'elicitationGone':
     case 'retry':
     case 'hook':
     case 'informational':

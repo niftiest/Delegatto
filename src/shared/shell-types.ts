@@ -38,6 +38,9 @@ export const APP_THEME_SCOPES: readonly AppThemeScope[] = ['chat', 'app']
 export const CLOSE_ACTIONS = ['ask', 'exit', 'tray'] as const
 export type CloseAction = typeof CLOSE_ACTIONS[number]
 
+/** A page of the Settings window, for opening it at one. */
+export type SettingsSection = 'startup' | 'updates' | 'defaults' | 'notifications' | 'appearance' | 'claude' | 'history' | 'sync' | 'mcp' | 'skills' | 'plugins' | 'openrouter' | 'engine'
+
 export type AppSettings = {
   // Startup & System (Windows-specific behaviour behind a platform guard)
   startWithWindows: boolean; startMinimized: boolean; startWithAdmin: boolean

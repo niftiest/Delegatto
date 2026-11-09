@@ -22,7 +22,6 @@ export const SYNC_IPC = {
   resolveConflict: 'sync:resolveConflict',
   chatInfo: 'sync:chatInfo',
   beforeSend: 'sync:beforeSend',
-  chatOpened: 'sync:chatOpened',
   removeFromGithub: 'sync:removeFromGithub',
   startFresh: 'sync:startFresh',
   recoveryKey: 'sync:recoveryKey',
@@ -246,7 +245,6 @@ export type SyncApi = {
   syncChatInfo(sessionPk: number): Promise<SyncChatInfo>
   /** Checks for newer messages if the last check is a few minutes old. */
   syncBeforeSend(sessionPk: number): Promise<SyncChatInfo>
-  syncChatOpened(sessionPk: number | null): void
   syncRemoveFromGithub(projectId: string): Promise<SyncResult>
   syncStartFresh(): Promise<SyncResult>
   /** Links to the account's sync repo with this key, or makes one when there's none. */

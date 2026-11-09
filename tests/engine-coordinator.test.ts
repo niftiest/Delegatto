@@ -511,6 +511,18 @@ describe('EngineCoordinator — permission requests', () => {
     expect(reqs).toEqual([{ pk: 1, req }])
   })
 
+  it('lists the requests still waiting, for a window opened after they were asked', () => {
+    const { coordinator, bridge } = makeCoordinator()
+    coordinator.send(1, 'hi')
+    const a: PermissionRequest = { id: 'perm-a', tool: 'Bash', input: { command: 'ls' }, sessionKey: 'session-1' }
+    const b: PermissionRequest = { id: 'perm-b', tool: 'Read', input: {}, sessionKey: 'session-1' }
+    bridge.fireRequest(a)
+    bridge.fireRequest(b)
+    expect(coordinator.pendingPermissionList()).toEqual([{ sessionPk: 1, req: a }, { sessionPk: 1, req: b }])
+    coordinator.resolvePermission('perm-a', 'deny')
+    expect(coordinator.pendingPermissionList()).toEqual([{ sessionPk: 1, req: b }])
+  })
+
   it('drops a permission request whose sessionKey cannot be mapped back to a sessionPk (no send happened yet)', () => {
     const { bridge } = makeCoordinator()
     const reqs: Array<{ pk: number; req: PermissionRequest }> = []
@@ -585,6 +597,28 @@ describe('EngineCoordinator — resolvePermission (T5 pairing)', () => {
     coordinator.resolvePermission('perm-5', 'deny', undefined, 'not today')
 
     expect(bridge.resolveCalls).toEqual([{ id: 'perm-5', decision: { behavior: 'deny', message: 'not today' } }])
+  })
+
+  it('answering takes the card back from every window, whatever the answer', () => {
+    const { coordinator, bridge } = makeCoordinator()
+    const seen: Array<{ pk: number; e: LiveEvent }> = []
+    coordinator.onEvent((pk, e) => seen.push({ pk, e }))
+    coordinator.send(1, 'hi')
+    const decisions = ['deny', 'allow', 'allow_always', 'allow_folder'] as const
+    decisions.forEach((d, i) => {
+      bridge.fireRequest({ id: `perm-g${i}`, tool: 'Read', input: { file_path: 'C:\\proj\\a.txt' }, sessionKey: 'session-1' })
+      coordinator.resolvePermission(`perm-g${i}`, d)
+    })
+    const gone = seen.filter(s => s.e.kind === 'permissionGone')
+    expect(gone).toEqual(decisions.map((_d, i) => ({ pk: 1, e: { kind: 'permissionGone', id: `perm-g${i}` } })))
+  })
+
+  it('answering an id that was never parked says nothing to the windows', () => {
+    const { coordinator } = makeCoordinator()
+    const seen: LiveEvent[] = []
+    coordinator.onEvent((_pk, e) => seen.push(e))
+    coordinator.resolvePermission('never-parked', 'allow')
+    expect(seen.filter(e => e.kind === 'permissionGone')).toEqual([])
   })
 
   it('resolving an unknown id does not throw and leaves no pending entry behind', () => {

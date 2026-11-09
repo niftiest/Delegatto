@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { Catalog } from '../catalog/db'
 import { removeChatFromCatalog, removeProjectFromCatalog } from '../delete-channel'
@@ -62,6 +63,12 @@ export async function endSessions(deps: ManageDeps, pids: number[]): Promise<End
     failures.push(...r.failures.map(f => ({ pid: f.session.pid, error: f.error })))
   }
   return { ended, failures }
+}
+
+/** Whether a project still has a chat in Claude's folder for it. A folder that's gone has none. */
+function hasChats(projectDir: string | null): boolean {
+  if (projectDir === null) return false
+  try { return readdirSync(projectDir).some(n => n.toLowerCase().endsWith('.jsonl')) } catch { return false }
 }
 
 function itemKey(a: { kind: string; path: string; description: string }): string {
@@ -286,10 +293,12 @@ export class DeleteWizard {
       } else {
         for (const b of batch) {
           const folder = b.selected.find(a => a.kind === 'ProjectFolder')
-          if (folder !== undefined && result.done.includes(folder.path)) {
-            removeProjectFromCatalog(this.db, b.project.encodedName)
-            this.deps.projectDeleted?.(b.project.workingDir)
-          }
+          if (folder !== undefined && result.done.includes(folder.path)) removeProjectFromCatalog(this.db, b.project.encodedName)
+          // Sync stops when the project's chats are gone, however they went: the whole folder,
+          // or its chats one by one.
+          const chatsLeft = hasChats(b.project.projectDir)
+          console.log(`[delete] project ${b.project.workingDir}: folder ${folder === undefined ? 'not chosen' : result.done.includes(folder.path) ? 'removed' : 'not removed'}, chats left: ${chatsLeft}`)
+          if (!chatsLeft) this.deps.projectDeleted?.(b.project.workingDir)
         }
       }
       return { ok: true, done: result.done, failures: result.failures, backupDir: result.backupDir, restorePoint: zip }

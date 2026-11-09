@@ -1,7 +1,8 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, powerMonitor, safeStorage, type IpcMainInvokeEvent } from 'electron'
+import { app, ipcMain, powerMonitor, safeStorage, type IpcMainInvokeEvent } from 'electron'
+import type { WindowHub } from './window-hub'
 import type { Catalog } from './catalog/db'
 import { getEngineSessionInfo } from './catalog/repos'
 import { getSettings, updateSettings } from './catalog/settings'
@@ -106,10 +107,10 @@ export type SyncIpcHandle = {
   projectDeleted(workingDir: string): Promise<void>
 }
 
-export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: EngineIpcHandle, paths: ClaudePaths = defaultPaths()): SyncIpcHandle {
+export function registerSyncIpc(db: Catalog, hub: WindowHub, engine: EngineIpcHandle, paths: ClaudePaths = defaultPaths()): SyncIpcHandle {
   const dataDir = app.getPath('userData')
   const send = (channel: string, payload: unknown): void => {
-    if (!window.isDestroyed()) window.webContents.send(channel, payload)
+    hub.send(channel, payload)
   }
 
   let pushTimer: NodeJS.Timeout | null = null
@@ -129,6 +130,10 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
       return getLiveSessions(paths).some(s => s.sessionId.toLowerCase() === id.toLowerCase() && !owned.has(s.pid))
     },
     stopChat: id => { engine.stopOwned([id]) },
+    chatPid: id => engine.ownedProcesses().find(o => o.sessionId.toLowerCase() === id.toLowerCase())?.pid ?? null,
+    processAlive: pid => {
+      try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
+    },
     afterLocalChange: () => engine.resync(),
     sessionPkOf: file => {
       const row = db.prepare('SELECT id FROM sessions WHERE file_path = ? COLLATE NOCASE').get(file) as { id: number } | undefined
@@ -205,10 +210,11 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
   }
   for (const [channel, fn] of Object.entries(handlers)) ipcMain.handle(channel, fn as (e: IpcMainInvokeEvent, ...args: unknown[]) => unknown)
 
-  const onChatOpened = (_e: unknown, pk: number | null): void => {
-    service.chatOpened(typeof pk === 'number' ? infoFor(pk)?.sessionId ?? null : null)
+  // Presence carries every chat shown in any window here.
+  const reportOpenChats = (): void => {
+    service.chatsOpened(hub.visibility.all().map(pk => infoFor(pk)?.sessionId).filter((id): id is string => id !== undefined))
   }
-  ipcMain.on(SYNC_IPC.chatOpened, onChatOpened)
+  const offVisibility = hub.onVisibilityChange(reportOpenChats)
 
   const check = (): void => { void service.tick() }
   const first = setTimeout(check, FIRST_CHECK_MS)
@@ -229,7 +235,7 @@ export function registerSyncIpc(db: Catalog, window: BrowserWindow, engine: Engi
       if (afterTurn !== null) clearTimeout(afterTurn)
       if (pushTimer !== null) clearTimeout(pushTimer)
       powerMonitor.removeListener('resume', check)
-      ipcMain.removeListener(SYNC_IPC.chatOpened, onChatOpened)
+      offVisibility()
       for (const channel of Object.keys(handlers)) ipcMain.removeHandler(channel)
     }
   }

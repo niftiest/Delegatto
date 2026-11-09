@@ -6,7 +6,7 @@ import type { ProjectSettings, ContextUsage } from './project-options'
 import type { ClaudeInfoResult, McpCheckResult, McpServerStatus } from './claude-info-types'
 import type { SessionSummary } from './types'
 import type { ExportChatResult, HookEntry, HookScope, HooksListing, PanelResult, PluginActionResult, PluginsState, WorkspaceDiff } from './command-panels-types'
-import type { ElicitationAnswer, LiveEvent, PermissionRequest, PermissionDecision, EngineSnapshot, ExternalLock, RemoteSession, TurnInfo, BackgroundTask } from './engine-types'
+import type { Elicitation, ElicitationAnswer, LiveEvent, PermissionRequest, PermissionDecision, EngineSnapshot, ExternalLock, RemoteSession, TurnInfo, BackgroundTask } from './engine-types'
 export type { EngineSnapshot, ExternalLock, RemoteSession } from './engine-types'
 // Type-only import: StreamedRow's home module reads real files (node:fs), but
 // importing just its *type* here is erased at compile time -- the same
@@ -58,6 +58,9 @@ export const ENGINE_IPC = {
   listPins: 'engine:listPins',
   stopTask: 'engine:stopTask',
   answerElicitation: 'engine:answerElicitation',
+  // What's still waiting on an answer, for a window opened after it was asked.
+  pendingPermissions: 'engine:pendingPermissions',
+  pendingQuestions: 'engine:pendingQuestions',
   chatMode: 'engine:chatMode',
   promptHistory: 'engine:promptHistory',
   claudeFound: 'engine:claudeFound',
@@ -285,6 +288,10 @@ export type EngineApi = {
   backgroundTasks(sessionPk: number): Promise<BackgroundTask[]>
   stopTask(sessionPk: number, taskId: string): Promise<void>
   answerElicitation(sessionPk: number, requestId: string, answer: ElicitationAnswer): Promise<void>
+  /** Permission requests still waiting on an answer, in every chat. */
+  pendingPermissions(): Promise<Array<{ sessionPk: number; req: PermissionRequest }>>
+  /** Questions MCP servers are still waiting on, in every chat. */
+  pendingQuestions(): Promise<Array<{ sessionPk: number; request: Elicitation }>>
   chatMode(sessionPk: number): Promise<string>
   /** Picks up what changed on disk without waiting for the next sweep. */
   indexNow(): Promise<void>

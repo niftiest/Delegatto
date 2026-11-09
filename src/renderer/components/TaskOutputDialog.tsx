@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogTarget } from './DialogHost'
+import { escapeIsFor } from '../escape-scope'
 import { api } from '../api'
 import { plainTerminalText } from '../lib'
 
@@ -8,6 +10,7 @@ const POLL_MS = 2000
 /** What a background command has printed so far: the last 8 KB, as the terminal's /tasks
  *  shows it. Keeps asking while it's open, and keeps the last answer once the task is gone. */
 export function TaskOutputDialog({ sessionPk, taskId, title, onClose }: { sessionPk: number; taskId: string; title: string; onClose: () => void }) {
+  const dialogTarget = useDialogTarget()
   const [output, setOutput] = useState<string | null>(null)
   const [truncated, setTruncated] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -38,14 +41,14 @@ export function TaskOutputDialog({ sessionPk, taskId, title, onClose }: { sessio
   useEffect(() => {
     // Ahead of everything else: behind this dialog, Esc would act on the message box.
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || !escapeIsFor(dialogTarget, e)) return
       e.preventDefault()
       e.stopImmediatePropagation()
       onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
+  }, [onClose, dialogTarget])
 
   return createPortal(
     <div className="modal-overlay app-dialog-overlay" role="presentation">
@@ -60,6 +63,6 @@ export function TaskOutputDialog({ sessionPk, taskId, title, onClose }: { sessio
         </div>
       </div>
     </div>,
-    document.body
+    dialogTarget
   )
 }

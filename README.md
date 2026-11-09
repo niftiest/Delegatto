@@ -2,6 +2,8 @@
 
 Delegatto is a Windows desktop app for Claude Code, laid out like a chat app. Every project you've worked on gets a place in one list, you can scroll back through every conversation, and you can keep chatting with Claude without opening a terminal.
 
+![Delegatto with a project's chat open: the project list on the left, the conversation in the middle, and Claude running four subagents in the background](.github/assets/screenshot.jpg)
+
 > Delegatto is an independent, unofficial project with no connection to Anthropic. Anthropic doesn't make, sponsor, endorse, or support it. Claude and Claude Code are trademarks of Anthropic.
 
 ## Getting started
@@ -23,6 +25,8 @@ Projects show up on their own, sorted into Today, Yesterday, This week and so on
 Projects with new activity are highlighted, and day dividers break up long chats. Ctrl+K searches every conversation you've ever had, and Ctrl+F searches the open project. Clicking a result goes to that message and scrolls the project into the middle of the list.
 
 A project with two or more chats shows them in a session list beside the chat, where you can right-click one to delete it. Each project opens on its newest chat.
+
+On a big screen, the split view puts two, three or four chats side by side in their own window. Pick a layout from the icon in the chat header, and the chat you're in becomes the first pane, then choose a project for each of the others. Each pane is a full working chat. You can drag the dividers, drag a pane by its name to swap it with another, close one and pick a different project, or switch layouts. Ctrl+1 to Ctrl+4 move between panes. The split window minimizes and maximizes on its own, and it comes back after a restart.
 
 If a project's folder is moved or deleted, the project goes to an Archived section and its chats stay readable. Its favorite, name, and icon follow it if it has an obvious new home.
 

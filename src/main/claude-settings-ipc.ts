@@ -1,4 +1,5 @@
-import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import type { WindowHub } from './window-hub'
 import type { Catalog } from './catalog/db'
 import { getSettings } from './catalog/settings'
 import { listProjects } from './catalog/repos'
@@ -42,7 +43,7 @@ function validTarget(t: unknown): ClaudeSettingsTarget {
   throw new Error('Not a settings location.')
 }
 
-export function registerClaudeSettingsIpc(db: Catalog, window: BrowserWindow, engine: EngineIpcHandle): { dispose(): void } {
+export function registerClaudeSettingsIpc(db: Catalog, hub: WindowHub, engine: EngineIpcHandle): { dispose(): void } {
   const loc = settingsLocations()
   const paths = defaultPaths()
   let remover: Promise<FileRemover> | null = null
@@ -62,7 +63,7 @@ export function registerClaudeSettingsIpc(db: Catalog, window: BrowserWindow, en
           ownedSessionIds: () => engine.ownedProcesses().map(o => o.sessionId)
         })
         lastRun = r
-        if (r.removed > 0 && !window.isDestroyed()) window.webContents.send(CLAUDE_SETTINGS_IPC.retentionCleaned, r)
+        if (r.removed > 0) hub.send(CLAUDE_SETTINGS_IPC.retentionCleaned, r)
         return r
       } finally {
         running = null

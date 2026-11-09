@@ -31,6 +31,15 @@ function isToolResult(content: unknown): boolean {
   return Array.isArray(content) && content.some((b: { type?: unknown }) => b?.type === 'tool_result')
 }
 
+/** A resume note Claude Code itself goes by. A rewind (or clearing the chat) writes one marked
+ *  `explicit`; the routine notes a Claude writes as it works aren't, and Claude Code resumes from
+ *  the newest message regardless of them. Those can lag behind, for example one written by a Claude
+ *  that's closing just as another PC's messages arrive, so they say nothing about a rewind. */
+export function isExplicitNote(row: unknown): boolean {
+  const r = row as { explicit?: unknown; rewound?: unknown }
+  return r.explicit === true || r.rewound === true
+}
+
 export function rewoundUuids(rows: readonly RawRow[]): Set<string> {
   const out = new Set<string>()
   let open: { prompt: string; parent: unknown; marker: string | null; seen: Set<string> } | null = null
@@ -42,6 +51,8 @@ export function rewoundUuids(rows: readonly RawRow[]): Set<string> {
     const row = raw as unknown as Row
     if (row.isSidechain === true) continue
     if (row.type === 'last-prompt') {
+      // Only a note marked explicit says the chat went somewhere: see isExplicitNote.
+      if (!isExplicitNote(raw)) continue
       // A leaf from before the message, or no leaf at all: the chat has gone back past it.
       const leaf = typeof row.leafUuid === 'string' ? row.leafUuid : null
       if (open?.marker && (leaf === null || !open.seen.has(leaf))) settle()

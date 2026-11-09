@@ -122,7 +122,8 @@ describe('reading a rewind from the transcript', () => {
   const user = (uuid: string, parentUuid: string, content: unknown): RawRow => ({ type: 'user', uuid, parentUuid, message: { role: 'user', content } }) as unknown as RawRow
   const assistant = (uuid: string, parentUuid: string): RawRow => ({ type: 'assistant', uuid, parentUuid, message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }) as unknown as RawRow
   const attachment = (uuid: string, parentUuid: string): RawRow => ({ type: 'attachment', uuid, parentUuid }) as unknown as RawRow
-  const leaf = (leafUuid: string): RawRow => ({ type: 'last-prompt', lastPrompt: 'x', leafUuid }) as unknown as RawRow
+  // As Claude Code writes a rewind's note: marked explicit. Its routine notes aren't, and say nothing.
+  const leaf = (leafUuid: string): RawRow => ({ type: 'last-prompt', lastPrompt: 'x', leafUuid, explicit: true, rewound: true }) as unknown as RawRow
   const MARK = [{ type: 'text', text: '[Request interrupted by user]' }]
 
   it('finds the rows Claude Code rewound past, as 2.1.318 writes them', () => {
@@ -131,7 +132,7 @@ describe('reading a rewind from the transcript', () => {
   })
 
   it('finds them on a first message too, when the leaf is empty', () => {
-    const rows = [user('bad', 'x', 'Plover'), user('m', 'bad', MARK), { type: 'last-prompt', lastPrompt: 'x' } as unknown as RawRow]
+    const rows = [user('bad', 'x', 'Plover'), user('m', 'bad', MARK), { type: 'last-prompt', lastPrompt: 'x', leafUuid: null, explicit: true } as unknown as RawRow]
     expect([...rewoundUuids(rows)].sort()).toEqual(['bad', 'm'])
   })
 
@@ -195,5 +196,14 @@ describe('Esc while an old process is still closing', () => {
     expect(await pool.rewind('k', 'u1')).toBe(true)
     expect(answers.at(-1)).toEqual(['rewind_conversation', { target_message_uuid: 'u1' }])
     expect(await pool.rewind('nobody', 'u1')).toBe(false)
+  })
+})
+
+describe('a routine resume note after an interruption', () => {
+  it('takes nothing back: only a note marked explicit is a rewind', () => {
+    const user = (uuid: string, parentUuid: string, content: unknown): RawRow => ({ type: 'user', uuid, parentUuid, message: { role: 'user', content } }) as unknown as RawRow
+    const assistant = (uuid: string, parentUuid: string): RawRow => ({ type: 'assistant', uuid, parentUuid, message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }) as unknown as RawRow
+    const rows = [assistant('a', 'h'), user('kept', 'a', 'Plover'), user('m', 'kept', [{ type: 'text', text: '[Request interrupted by user]' }]), { type: 'last-prompt', lastPrompt: 'x', leafUuid: 'a' } as unknown as RawRow]
+    expect([...rewoundUuids(rows)]).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 import { FONT_SCALE_DEFAULT, FONT_SCALE_MAX, FONT_SCALE_MIN, stepFontScale } from '../../shared/font-settings'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import type { AppSettings } from '../../shared/shell-types'
+import type { AppSettings, SettingsSection } from '../../shared/shell-types'
 import { McpSettings } from './McpSettings'
 import { SkillsSettings } from './SkillsSettings'
 import { PluginsSettings } from './PluginsSettings'
@@ -15,7 +15,7 @@ import { ChatHistorySettings } from './ChatHistorySettings'
 import { SyncSettings } from './SyncSettings'
 import { ThemeControls } from './ThemeControls'
 
-export type SettingsSection = 'startup' | 'updates' | 'defaults' | 'notifications' | 'appearance' | 'claude' | 'history' | 'sync' | 'mcp' | 'skills' | 'plugins' | 'openrouter' | 'engine'
+export type { SettingsSection }
 type Section = SettingsSection
 const SECTIONS: { id: Section; label: string }[] = [
   { id: 'startup', label: 'Startup & System' },

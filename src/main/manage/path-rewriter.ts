@@ -4,8 +4,8 @@ import { normalizePath } from './paths'
  *  `oldDir` (and anything under it) with `newDir`, keeping the spelling of each
  *  occurrence: JSON-escaped backslashes (once or twice), raw backslashes,
  *  forward slashes and MSYS (`/d/...`). A match only counts when the next char
- *  is not a letter, digit, '.', '_' or '-', so `D:\X` never hits `D:\X.com`,
- *  `D:\Xy` or `D:\Xé`. Known sibling folders whose name continues with other
+ *  is not a letter, digit, '_' or '-', nor a '.' followed by one of those, so `D:\X`
+ *  never hits `D:\X.com`, `D:\Xy` or `D:\Xé`, but does hit `D:\X.` ending a sentence. Known sibling folders whose name continues with other
  *  chars (e.g. "X Stuff", "X (copy)") are passed as `siblingSuffixes` and are
  *  excluded too. Case-insensitive. All forms are matched in a single pass, so
  *  replaced text is never rewritten again. */
@@ -24,7 +24,9 @@ export class PathRewriter {
     // New path has no drive letter (UNC): MSYS hits become forward-slash paths.
     newForms[MSYS_FORM] ??= newForms[3]!
 
-    let boundary = `(?!${NAME_CHAR})`
+    // A '.' only continues a name when more of a name follows it: `D:\X.com` is another
+    // folder, but `D:\X.` at the end of a sentence is this one.
+    let boundary = `(?!${NAME_CHAR_NO_DOT})(?!\\.${NAME_CHAR_NO_DOT})`
     const seen = new Set<string>()
     const suffixes: string[] = []
     for (const s of siblingSuffixes) {
@@ -72,6 +74,7 @@ export class PathRewriter {
 }
 
 const NAME_CHAR = '[\\p{L}\\p{N}._\\-]'
+const NAME_CHAR_NO_DOT = '[\\p{L}\\p{N}_\\-]'
 const MSYS_FORM = 4
 
 /** Escapes for a `u`-flag regex (where escaping a non-syntax char is an error). */

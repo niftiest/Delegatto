@@ -180,6 +180,17 @@ export type EngineSessionInfo = {
   isNew: boolean
 }
 
+/** The projects these chats belong to, once each. Unknown chats are left out. */
+export function projectIdsOfSessions(db: Catalog, sessionPks: number[]): number[] {
+  const stmt = db.prepare('SELECT project_id AS projectId FROM sessions WHERE id = ?')
+  const ids = new Set<number>()
+  for (const pk of sessionPks) {
+    const row = stmt.get(pk) as { projectId: number } | undefined
+    if (row !== undefined) ids.add(row.projectId)
+  }
+  return [...ids]
+}
+
 /** A session with no recorded project cwd (an older/partial index, or a
  *  project whose cwd was never observed) can't be spawned against -- there is
  *  nowhere to run `claude`. Treated the same as "session not found" by the

@@ -37,13 +37,40 @@ export function schtasksDeleteArgs(): string[] {
   return ['/delete', '/tn', TASK_NAME, '/f']
 }
 
+/** Passed to the elevated instance, so it waits for this one to let go of the
+ *  single-instance lock instead of quitting as a second launch. */
+export const ELEVATED_RELAUNCH_ARG = '--elevated-relaunch'
+/** How long an elevated relaunch keeps trying for the lock, and how often. */
+export const LOCK_RETRY_FOR_MS = 10_000
+export const LOCK_RETRY_EVERY_MS = 250
+
 /** PowerShell argv that relaunches the app elevated via `Start-Process -Verb
- *  RunAs` (raises one UAC prompt). App args are passed through. */
+ *  RunAs` (raises one UAC prompt). App args are passed through. PowerShell
+ *  exits 0 once the elevated process has started and 1 if it couldn't start,
+ *  including when the user declines the UAC prompt. */
 export function elevatedRelaunchArgs(exePath: string, appArgs: string[] = []): string[] {
   const argList = appArgs.length > 0
     ? ` -ArgumentList ${appArgs.map(a => `'${a.replace(/'/g, "''")}'`).join(',')}`
     : ''
-  return ['-NoProfile', '-Command', `Start-Process -FilePath '${exePath.replace(/'/g, "''")}' -Verb RunAs${argList}`]
+  const start = `Start-Process -FilePath '${exePath.replace(/'/g, "''")}' -Verb RunAs${argList} -ErrorAction Stop`
+  return ['-NoProfile', '-NonInteractive', '-Command', `try { ${start} } catch { exit 1 }`]
+}
+
+/** The environment for the relaunch, without the portable launcher's variables
+ *  (they describe this run's unpacked copy, not the next one). */
+export function relaunchEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env }
+  delete out.PORTABLE_EXECUTABLE_DIR
+  delete out.PORTABLE_EXECUTABLE_FILE
+  delete out.PORTABLE_EXECUTABLE_APP_FILENAME
+  return out
+}
+
+/** Whether a launch that didn't get the single-instance lock should try again.
+ *  Only an elevated relaunch does, for a while, because the instance that
+ *  started it is still quitting. Any other second launch quits at once. */
+export function shouldRetryInstanceLock(argv: readonly string[], elapsedMs: number): boolean {
+  return argv.includes(ELEVATED_RELAUNCH_ARG) && elapsedMs < LOCK_RETRY_FOR_MS
 }
 
 function quote(s: string): string {
@@ -86,12 +113,18 @@ export function applyStartupSettings(
   }
 }
 
-/** Relaunch elevated (one UAC prompt) and signal the caller to quit the
- *  current unelevated instance. Returns false if not on Windows. */
-export function relaunchElevated(exePath: string, appArgs: string[] = []): boolean {
-  if (!isWindows) return false
-  execFile('powershell', elevatedRelaunchArgs(exePath, appArgs), { windowsHide: true }, err => {
-    if (err) console.warn('[elevation] relaunch failed', err.message)
+/** Relaunch elevated (one UAC prompt). Resolves once PowerShell has exited:
+ *  'started' when the elevated instance is running (the caller should quit
+ *  now), 'failed' when it isn't (UAC declined, or PowerShell failed), and
+ *  'unsupported' off Windows. The caller must not quit before this resolves:
+ *  a child that isn't detached is in libuv's kill-on-close job object, so
+ *  quitting early kills PowerShell before it raises the prompt. */
+export function relaunchElevated(exePath: string, appArgs: string[] = []): Promise<'started' | 'failed' | 'unsupported'> {
+  if (!isWindows) return Promise.resolve('unsupported')
+  return new Promise(resolve => {
+    execFile('powershell', elevatedRelaunchArgs(exePath, appArgs), { windowsHide: true, env: relaunchEnv(process.env) }, err => {
+      if (err) console.warn('[elevation] relaunch failed', err.message)
+      resolve(err ? 'failed' : 'started')
+    })
   })
-  return true
 }
