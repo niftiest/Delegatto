@@ -49,6 +49,18 @@ export function SlotPicker({ layout, startIndex, count, channels, exclude = NO_D
   const [deferredDirs, setDeferredDirs] = useState<string[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // A row picked out by the mouse is already on screen, so the list doesn't scroll to it.
+  const byMouse = useRef(false)
+  // Chromium sends a mousemove when the list changes under a still pointer (the groups arriving
+  // a moment after opening); only a real move picks out a row.
+  const lastPointer = useRef<{ x: number; y: number } | null>(null)
+  const hover = (i: number, e: React.MouseEvent): void => {
+    const last = lastPointer.current
+    lastPointer.current = { x: e.screenX, y: e.screenY }
+    if (last === null || (last.x === e.screenX && last.y === e.screenY) || i === active) return
+    byMouse.current = true
+    setActive(i)
+  }
   // Set by Cancel, Esc and unmounting: a pick still loading then comes to nothing.
   const stopped = useRef(false)
   useEffect(() => () => { stopped.current = true }, [])
@@ -72,7 +84,13 @@ export function SlotPicker({ layout, startIndex, count, channels, exclude = NO_D
   useEffect(() => { setActive(0) }, [query, step])
   useEffect(() => { inputRef.current?.focus() }, [step])
   useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>('.slot-picker-row.active')?.scrollIntoView({ block: 'nearest' })
+    const list = listRef.current
+    if (list === null) return
+    // The first row sits under its section's title: show the list from the very top, or the
+    // title gets nudged out of view when the groups arrive a moment after opening.
+    if (byMouse.current) { byMouse.current = false; return }
+    if (active === 0) { list.scrollTop = 0; return }
+    list.querySelector<HTMLElement>('.slot-picker-row.active')?.scrollIntoView({ block: 'nearest' })
   }, [active, rows])
 
   const slot = startIndex + step
@@ -178,7 +196,7 @@ export function SlotPicker({ layout, startIndex, count, channels, exclude = NO_D
                 return (
                   <button key={c.id} type="button" role="option" aria-selected={i === active} tabIndex={-1}
                     className={`slot-picker-row${i === active ? ' active' : ''}`} disabled={busy}
-                    onMouseMove={() => { if (i !== active) setActive(i) }} onClick={() => void choose(c)}>
+                    onMouseMove={e => hover(i, e)} onClick={() => void choose(c)}>
                     <ProjectIcon icon={resolveChannelIcon(c.meta, name)} />
                     <span className="slot-picker-name">{name}</span>
                     {c.cwd !== null && <span className="slot-picker-path">{c.cwd}</span>}
