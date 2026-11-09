@@ -26,6 +26,25 @@ const CARD_OPEN_MS = 400
 /** How far above the end the reader has to be before the jump button shows. */
 const JUMP_BUTTON_GAP = 200
 
+/** What a `!` command printed, folded to one line until it's opened: in the chat it's a
+ *  record of what ran, and a long one would bury the conversation. */
+function ShellOutput({ uuid, text }: { uuid: string; text: string }) {
+  const lines = text.split('\n')
+  const first = lines.find(l => l.trim() !== '')?.trim() ?? ''
+  return (
+    <div className="bubble-claude shell-output-card" data-msg={uuid}>
+      <PinBadge uuid={uuid} />
+      <details>
+        <summary className="shell-output-summary">
+          <span className="shell-output-label">Output · {lines.length === 1 ? '1 line' : `${lines.length.toLocaleString('en-US')} lines`}</span>
+          <span className="shell-output-preview">{first}</span>
+        </summary>
+        <pre className="shell-output">{text}</pre>
+      </details>
+    </div>
+  )
+}
+
 export function Transcript({ pendingToolIds, groupToolCalls = true, items: allItems, hasMore, loadingOlder, loading, onReachTop, permissionRequests, onResolvePermission, elicitations = [], onAnswerElicitation, onOpenLink, livePreview, liveThinking = null, sending = false, savedTextOnly = false, showToolCalls = true, showThinking = true, onAtBottomChange, fileMissing = false, claudeIcon = { kind: 'initials' }, scrollToBottomSignal, thinkingExpanded = false, toolCardsExpanded = false, jumpTo = null, onJumped, pinnedUuids = NO_PINS }: {
   items: RenderItem[]
   hasMore: boolean
@@ -373,7 +392,7 @@ export function Transcript({ pendingToolIds, groupToolCalls = true, items: allIt
                   }
                   const renderItem = (it: RenderItem, k: string): ReactNode => {
                     if (it.kind === 'text') return it.literal === true
-                      ? <pre key={k} className="bubble-claude shell-output" data-msg={it.uuid}><PinBadge uuid={it.uuid} />{it.text}</pre>
+                      ? <ShellOutput key={k} uuid={it.uuid} text={it.text} />
                       : <Markdown key={k} text={it.text} className="bubble-claude" anchor={it.uuid} />
                     if (it.kind === 'tool') return <ToolCard key={k} item={it} defaultOpen={toolCardsExpanded} pending={pendingToolIds?.has(it.toolUseId) ?? false} />
                     if (it.kind === 'image') return <ChatImage key={k} source={it.source} />
