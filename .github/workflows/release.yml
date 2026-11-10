@@ -52,11 +52,27 @@ jobs:
       - name: Build installer and portable exe
         run: npx electron-builder --win nsis portable --publish never
 
+      # Anyone can check a download against VirusTotal's scan. Pinned to v5.0.0 by commit,
+      # since it's handed the API key. A failed upload doesn't stop the release: the notes
+      # then leave the scan links out.
+      - name: Send the exes to VirusTotal
+        id: virustotal
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        uses: crazy-max/ghaction-virustotal@936d8c5c00afe97d3d9a1af26d017cfdf26800a2
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          request_rate: 4
+          files: |
+            release/Delegatto-Setup-*.exe
+            release/Delegatto-Portable-*.exe
+
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCANNED: ${{ steps.virustotal.outcome == 'success' }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           files=(
@@ -65,7 +81,31 @@ jobs:
             "release/Delegatto-Portable-$version.exe"
             "release/latest.yml"
           )
-          gh release create "$GITHUB_REF_NAME" --title "Delegatto $version" --generate-notes "${files[@]}"
+          # Each exe's SHA-256, and its VirusTotal page, which shows the results once the
+          # scan finishes (a few minutes after the release).
+          {
+            echo "## Downloads"
+            echo
+            if [ "$SCANNED" = "true" ]; then
+              echo "| File | SHA-256 | VirusTotal |"
+              echo "|---|---|---|"
+            else
+              echo "| File | SHA-256 |"
+              echo "|---|---|"
+            fi
+            for exe in "release/Delegatto-Setup-$version.exe" "release/Delegatto-Portable-$version.exe"; do
+              hash="$(sha256sum "$exe" | cut -d' ' -f1)"
+              name="$(basename "$exe")"
+              if [ "$SCANNED" = "true" ]; then
+                echo "| $name | \`$hash\` | [Scan results](https://www.virustotal.com/gui/file/$hash) |"
+              else
+                echo "| $name | \`$hash\` |"
+              fi
+            done
+            echo
+          } > release-notes.md
+          cat release-notes.md
+          gh release create "$GITHUB_REF_NAME" --title "Delegatto $version" --notes-file release-notes.md --generate-notes "${files[@]}"
 
       # main is what visitors see, and it means "the latest release". Forward only:
       # GitHub refuses this if main has commits the release doesn't, and the run fails.
