@@ -25,9 +25,36 @@ function WindowRow({ label, window: w, now }: { label: string; window: PlanWindo
   )
 }
 
-/** On a plan, how much of its limits is used. Otherwise each token is paid for, so
- *  it's what the open chat has used and what that costs. */
-export function UsageFooter({ usage, session }: { usage: PlanUsage; session: SessionSummary | null }) {
+function StripWindow({ label, window: w, now }: { label: string; window: PlanWindow; now: number }) {
+  const level = w.percent >= 100 ? ' full' : w.percent >= WARN_PERCENT ? ' warn' : ''
+  const reset = w.resetsAt === null ? null : formatReset(w.resetsAt, now)
+  return (
+    <span className={`strip-usage-window usage-window${level}`} title={reset === null ? undefined : `${label}: ${Math.round(w.percent)}% used, resets ${reset}`}>
+      <span>{label} <span className="usage-window-pct">{Math.round(w.percent)}%</span></span>
+      <span className="usage-bar strip-usage-bar"><span className="usage-bar-fill" style={{ width: `${Math.min(100, w.percent)}%` }} /></span>
+      {reset !== null && <span className="usage-window-reset">resets {reset}</span>}
+    </span>
+  )
+}
+
+/** The plan and its windows on one line, for the split window's top strip. Nothing off a plan. */
+export function StripUsage({ usage }: { usage: PlanUsage }) {
+  const now = useNow(usage)
+  if (!showsPlan(usage)) return null
+  const fiveHour = currentWindow(usage.fiveHour, now)
+  const sevenDay = currentWindow(usage.sevenDay, now)
+  return (
+    <div className="strip-usage" aria-label="Plan usage">
+      <span className="strip-usage-plan">{planLabel(usage.plan)}{usage.usingExtra && <span className="usage-extra"> · extra usage</span>}</span>
+      {fiveHour !== null && <StripWindow label="5-hour" window={fiveHour} now={now} />}
+      {sevenDay !== null && <StripWindow label="Week" window={sevenDay} now={now} />}
+      {fiveHour === null && sevenDay === null && <span className="usage-window-reset">Usage shows after the next reply</span>}
+    </div>
+  )
+}
+
+/** The time, kept current each minute and whenever a new reading arrives. */
+function useNow(usage: PlanUsage): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), TICK_MS)
@@ -35,6 +62,13 @@ export function UsageFooter({ usage, session }: { usage: PlanUsage; session: Ses
   }, [])
   // The readings arrive with replies, so the clock has to catch up with them too.
   useEffect(() => setNow(Date.now()), [usage])
+  return now
+}
+
+/** On a plan, how much of its limits is used. Otherwise each token is paid for, so
+ *  it's what the open chat has used and what that costs. */
+export function UsageFooter({ usage, session }: { usage: PlanUsage; session: SessionSummary | null }) {
+  const now = useNow(usage)
 
   if (showsPlan(usage)) {
     const fiveHour = currentWindow(usage.fiveHour, now)

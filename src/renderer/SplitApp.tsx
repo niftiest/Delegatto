@@ -17,6 +17,7 @@ import { useSyncChat } from './components/SyncChat'
 import { Resizer } from './components/Resizer'
 import { TextMenuHost } from './components/TextMenu'
 import { LayoutMenu } from './components/LayoutMenu'
+import { StripUsage } from './components/UsageFooter'
 import { ProjectIcon, SlotPicker } from './components/SlotPicker'
 import { askChoiceInApp } from './components/AppDialog'
 import { applyPicks, newSlotsRun, planLayoutChange, type PickRun } from './split-flow'
@@ -465,6 +466,7 @@ export function SplitApp() {
       <div className="split-strip">
         <LayoutMenu look="strip" current={split === null ? null : layout} onPick={to => void onLayoutPick(to).catch(pickFailed)} />
         <div className="split-strip-title">{splitTitle(names)}</div>
+        <StripUsage usage={data.planUsage} />
       </div>
       <div className="split-grid" ref={gridRef}
         style={{ gridTemplateColumns: template.columns, gridTemplateRows: template.rows, gridTemplateAreas: template.areas.join(' ') }}>
