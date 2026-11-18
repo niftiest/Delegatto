@@ -42,10 +42,13 @@ export class PlanUsageTracker {
   }
 
   /** From a `get_usage` answer. `rate_limits` can be null even on a plan, so that
-   *  leaves earlier readings alone; only "limits don't apply" clears them. */
-  applyAnswer(raw: unknown): void {
+   *  leaves earlier readings alone; only "limits don't apply" clears them.
+   *  `displayName` is the plan's own name ("Ultra"), which `subscription_type` lacks:
+   *  it has only pro, max, team and enterprise. Used only on a plan, as Claude Code does. */
+  applyAnswer(raw: unknown, displayName: string | null = null): void {
     if (!isObj(raw)) return
-    const plan = typeof raw.subscription_type === 'string' && raw.subscription_type.length > 0 ? raw.subscription_type : null
+    const type = typeof raw.subscription_type === 'string' && raw.subscription_type.length > 0 ? raw.subscription_type : null
+    const plan = type === null ? null : displayName ?? type
     if (raw.rate_limits_available === false) {
       this.set({ ...NO_PLAN_USAGE, plan, limitsApply: false })
       return
@@ -70,6 +73,17 @@ export class PlanUsageTracker {
     }
     for (const cb of this.listeners) cb(next)
   }
+}
+
+/** The plan's name as Claude Code shows it, from the account it keeps in
+ *  `.claude.json` (`oauthAccount.planDisplayName`), or null. Read only. */
+export function planDisplayName(claudeJson: string | null): string | null {
+  if (claudeJson === null) return null
+  let root: unknown
+  try { root = JSON.parse(claudeJson) } catch { return null }
+  const account = isObj(root) && isObj(root.oauthAccount) ? root.oauthAccount : null
+  const name = typeof account?.planDisplayName === 'string' ? account.planDisplayName.trim() : ''
+  return name.length > 0 && name.length <= 40 ? name : null
 }
 
 function load(file: string): PlanUsage {

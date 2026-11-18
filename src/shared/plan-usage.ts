@@ -9,7 +9,7 @@ export interface PlanWindow {
 }
 
 export interface PlanUsage {
-  /** 'max', 'pro', 'team', 'enterprise'; null on an API key or third-party provider. */
+  /** The plan's display name ("Ultra") or else its type ('max', 'pro', 'team', 'enterprise'); null on an API key or third-party provider. */
   plan: string | null
   /** False on an API key, Bedrock or Vertex; null until Claude Code has said. */
   limitsApply: boolean | null

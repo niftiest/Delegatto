@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseEvent } from '../src/main/engine/events'
-import { PlanUsageTracker } from '../src/main/engine/plan-usage'
+import { PlanUsageTracker, planDisplayName } from '../src/main/engine/plan-usage'
 import { currentWindow, planLabel, showsPlan, NO_PLAN_USAGE } from '../src/shared/plan-usage'
 
 // Shapes copied from Claude Code 2.1.316's real output on a Max plan.
@@ -89,8 +89,39 @@ describe('PlanUsageTracker', () => {
     }
   })
 
+  it('names the plan as Claude Code does, by its display name when it has one', () => {
+    const t = new PlanUsageTracker(null)
+    t.applyAnswer(realAnswer, 'Ultra')
+    expect(t.get().plan).toBe('Ultra')
+    expect(planLabel(t.get().plan)).toBe('Ultra plan')
+  })
+
+  it('keeps the plan type when there is no display name, and no name off a plan', () => {
+    const t = new PlanUsageTracker(null)
+    t.applyAnswer(realAnswer, null)
+    expect(t.get().plan).toBe('max')
+    t.applyAnswer(apiKeyAnswer, 'Ultra')
+    expect(t.get().plan).toBeNull()
+  })
+
   it('starts empty when the saved file is missing or broken', () => {
     expect(new PlanUsageTracker(join(tmpdir(), 'no-such-plan-usage.json')).get()).toEqual(NO_PLAN_USAGE)
+  })
+})
+
+describe('planDisplayName', () => {
+  it('reads oauthAccount.planDisplayName from .claude.json', () => {
+    expect(planDisplayName(JSON.stringify({ oauthAccount: { planDisplayName: 'Ultra', billingType: 'stripe_subscription' } }))).toBe('Ultra')
+    expect(planDisplayName(JSON.stringify({ oauthAccount: { planDisplayName: '  Max 20x ' } }))).toBe('Max 20x')
+  })
+
+  it('is null when missing, blank, odd or unreadable', () => {
+    expect(planDisplayName(null)).toBeNull()
+    expect(planDisplayName('not json')).toBeNull()
+    expect(planDisplayName(JSON.stringify({}))).toBeNull()
+    expect(planDisplayName(JSON.stringify({ oauthAccount: { planDisplayName: '' } }))).toBeNull()
+    expect(planDisplayName(JSON.stringify({ oauthAccount: { planDisplayName: 7 } }))).toBeNull()
+    expect(planDisplayName(JSON.stringify({ oauthAccount: { planDisplayName: 'x'.repeat(41) } }))).toBeNull()
   })
 })
 
