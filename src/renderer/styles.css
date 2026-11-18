@@ -1431,7 +1431,7 @@ td.mg-c-date { font-family:var(--mono); font-size:11.5px; }
 .update-icon-busy:hover { background:none; }
 .update-bar { flex:none; display:flex; align-items:center; gap:10px; padding:7px 14px; background:var(--good);
   color:#fff; font-size:13px; font-weight:600; }
-.update-bar-btn { margin-left:auto; background:#fff; color:#111; border:0; border-radius:4px; padding:4px 10px;
+.update-bar-btn { flex:none; white-space:nowrap; margin-left:auto; background:#fff; color:#111; border:0; border-radius:4px; padding:4px 10px;
   font:inherit; font-size:12.5px; cursor:pointer; }
 .update-bar-btn-next { margin-left:0; }
 .restart-dialog { width:500px; }

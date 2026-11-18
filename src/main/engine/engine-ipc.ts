@@ -671,7 +671,8 @@ export function registerEngineIpc(db: Catalog, hub: WindowHub, hooks: EngineHook
     cwd: () => homedir(),
     openUrl: url => { void shell.openExternal(url) },
     onChange: state => { hub.send(ENGINE_IPC.loginChanged, state) },
-    onSignedIn: () => { reloadChatsIn(null); planUsageRefresh() }
+    onSignedIn: () => { reloadChatsIn(null); planUsageRefresh() },
+    planName
   })
   ipcMain.handle(ENGINE_IPC.loginState, () => login.state)
   ipcMain.handle(ENGINE_IPC.loginStart, () => login.start())

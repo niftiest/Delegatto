@@ -58,13 +58,13 @@ class FakeClaude implements ChildLike {
 
 const tick = (): Promise<void> => new Promise(r => setTimeout(r, 20))
 
-function setup(child: FakeClaude) {
+function setup(child: FakeClaude, planName: string | null = null) {
   const opened: string[] = []
   const states: LoginState[] = []
   let signedIn = 0
   const login = new ClaudeLogin({
     claudeBin: () => 'claude', cwd: () => 'C:\\Users\\me', openUrl: u => opened.push(u),
-    onChange: s => states.push(s), onSignedIn: () => { signedIn++ }, spawnFn: () => child
+    onChange: s => states.push(s), onSignedIn: () => { signedIn++ }, spawnFn: () => child, planName: () => planName
   })
   return { login, opened, states, signedIn: () => signedIn }
 }
@@ -83,6 +83,15 @@ describe('signing in to Claude Code from the app', () => {
     expect(t.login.state).toEqual({ state: 'done', email: 'me@example.com', plan: 'max' })
     expect(t.signedIn()).toBe(1)
     expect(child.ended).toBe(true)
+  })
+
+  it('names the plan as Claude Code does, such as Ultra, when it has the name', async () => {
+    const child = new FakeClaude()
+    const t = setup(child, 'Ultra')
+    await t.login.start()
+    child.signedIn()
+    await tick()
+    expect(t.login.state).toEqual({ state: 'done', email: 'me@example.com', plan: 'Ultra' })
   })
 
   it('takes a pasted code, split into its two parts', async () => {

@@ -10,7 +10,7 @@ import { CreateImageDialog } from './components/CreateImageDialog'
 import { Blade } from './components/Blade'
 import { Resizer } from './components/Resizer'
 import { IndexProgress } from './components/IndexProgress'
-import { ArchivedNotice, readArchivedSeen, writeArchivedSeen } from './components/ArchivedNotice'
+import { ArchivedNotice, archivedNotice, readArchivedSeen, writeArchivedSeen } from './components/ArchivedNotice'
 import { NewChatDialog } from './components/NewChatDialog'
 import { SearchOverlay } from './components/SearchOverlay'
 import { SettingsWindow, type SettingsSection } from './components/SettingsWindow'
@@ -122,14 +122,14 @@ export function App() {
   // (registered once, in useAppData) can diff against it without re-subscribing
   // on every project change.
   const projectIdRef = useRef<number | null>(null)
+  const archivedShown = useRef<ChannelRow[]>([])
   useEffect(() => {
     if (channels.length === 0) return
-    const archived = channels.filter(c => c.archived === true)
-    const seen = new Set(readArchivedSeen())
-    setNewlyArchived(archived.filter(c => !seen.has(c.dirName)))
-    // A folder that came back is forgotten, so losing it again is news.
-    const stillArchived = [...seen].filter(d => archived.some(c => c.dirName === d))
-    if (stillArchived.length !== seen.size) writeArchivedSeen(stillArchived)
+    const seen = readArchivedSeen()
+    const next = archivedNotice(channels.filter(c => c.archived === true), seen, archivedShown.current)
+    if (next.seen.length !== seen.length || next.seen.some((d, i) => d !== seen[i])) writeArchivedSeen(next.seen)
+    archivedShown.current = next.shown
+    setNewlyArchived(next.shown)
   }, [channels])
   useEffect(() => { projectIdRef.current = project?.id ?? null }, [project])
 
@@ -735,10 +735,14 @@ export function App() {
         <UpdateBar />
         {chatScaleNote !== null && <div className="chat-scale-note" role="status">{chatScaleNote}%</div>}
         {newlyArchived.length > 0 && (
-          <ArchivedNotice projects={newlyArchived} onDismiss={() => {
-            writeArchivedSeen(channels.filter(c => c.archived === true).map(c => c.dirName))
-            setNewlyArchived([])
-          }} />
+          <ArchivedNotice projects={newlyArchived}
+            onShow={() => {
+              setSidebarExpanded(true)
+              setRevealChannel(newlyArchived[0]!.id)
+              archivedShown.current = []
+              setNewlyArchived([])
+            }}
+            onDismiss={() => { archivedShown.current = []; setNewlyArchived([]) }} />
         )}
         {settings !== null && !settings.retentionNoticeDismissed && (
           <RetentionNotice

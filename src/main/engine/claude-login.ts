@@ -34,6 +34,8 @@ export class ClaudeLogin {
     onChange: (state: LoginState) => void
     /** Signed in: chats running on the old login should start again on the new one. */
     onSignedIn: () => void
+    /** The plan's own name ("Ultra"), which the answer's subscriptionType lacks. */
+    planName?: () => string | null
     spawnFn?: SpawnFn
   }) {
     this.spawnFn = opts.spawnFn ?? defaultSpawn
@@ -109,7 +111,9 @@ export class ClaudeLogin {
 
   private finish(answer: unknown): void {
     this.close()
-    this.set({ state: 'done', ...accountOf(answer) })
+    const account = accountOf(answer)
+    const plan = account.plan === null ? null : this.opts.planName?.() ?? account.plan
+    this.set({ state: 'done', ...account, plan })
     this.opts.onSignedIn()
   }
 

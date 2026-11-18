@@ -27,13 +27,31 @@ export function archivedNoticeText(names: string[]): string {
     : `The folders of ${who} were moved or deleted, so they're now under Archived at the bottom of the chat list. Their chats are kept to read.`
 }
 
+/** What the notice shows, and the projects to remember as told about, after the chat
+ *  list changes. A project counts as told about as soon as it's on show, so the notice
+ *  lasts this run at most (until dismissed) and never comes back at the next launch.
+ *  `shown` is what's on show now; `seen` is what was remembered before. */
+export function archivedNotice(archived: ChannelRow[], seen: string[], shown: ChannelRow[]): { shown: ChannelRow[]; seen: string[] } {
+  const archivedDirs = new Set(archived.map(c => c.dirName))
+  // A folder that came back is forgotten, so losing it again is news.
+  const kept = seen.filter(d => archivedDirs.has(d))
+  const fresh = archived.filter(c => !kept.includes(c.dirName))
+  const stillShown = shown.filter(c => archivedDirs.has(c.dirName))
+  const shownDirs = new Set(stillShown.map(c => c.dirName))
+  return {
+    shown: [...stillShown, ...fresh.filter(c => !shownDirs.has(c.dirName))],
+    seen: [...kept, ...fresh.map(c => c.dirName)]
+  }
+}
+
 /** One notice however many there are, and only for ones not mentioned before. */
-export function ArchivedNotice({ projects, onDismiss }: { projects: ChannelRow[]; onDismiss: () => void }) {
+export function ArchivedNotice({ projects, onShow, onDismiss }: { projects: ChannelRow[]; onShow: () => void; onDismiss: () => void }) {
   const names = projects.map(p => resolveChannelName(p.meta, p.cwd, p.dirName))
   return (
     <div className="update-bar" role="status">
       <span>{archivedNoticeText(names)}</span>
-      <button type="button" className="update-bar-x" aria-label="Dismiss" title="Got it" onClick={onDismiss}>✕</button>
+      <button type="button" className="update-bar-btn" onClick={onShow}>Show</button>
+      <button type="button" className="update-bar-btn update-bar-btn-next" onClick={onDismiss}>Got it</button>
     </div>
   )
 }

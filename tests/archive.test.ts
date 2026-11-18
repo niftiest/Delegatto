@@ -4,7 +4,7 @@ import { upsertProject, setProjectCwd, upsertSession } from '../src/main/catalog
 import { backupCatalogOnce, chatsToShow, folderGone, isConversationText, moveCustomisations, withoutMovedChats } from '../src/main/catalog/archive'
 import { setChannelGroup, setChannelIcon, setFriendlyName, setStarred, getChannelMeta, createGroup } from '../src/main/catalog/metadata'
 import { groupChannels } from '../src/renderer/lib'
-import { archivedNoticeText } from '../src/renderer/components/ArchivedNotice'
+import { archivedNotice, archivedNoticeText } from '../src/renderer/components/ArchivedNotice'
 import type { ChannelRow } from '../src/shared/types'
 
 const DISK = new Set(['C:\\', 'D:\\', 'D:\\GIT\\Demo', 'D:\\GIT\\Other', 'E:\\'])
@@ -182,6 +182,25 @@ describe('the chat list and notice', () => {
     const many = archivedNoticeText(['a', 'b', 'c', 'd', 'e', 'f', 'g'])
     expect(many).toContain('a, b, c, d, e and 2 more')
     expect(many).toContain('Archived')
+  })
+
+  it('counts a project as told about the moment the notice shows, and keeps showing it until dismissed', () => {
+    const gone = [row(2, { archived: true }), row(3, { archived: true })]
+    const first = archivedNotice(gone, ['d3'], [])
+    expect(first.shown.map(c => c.id)).toEqual([2])
+    expect(first.seen.sort()).toEqual(['d2', 'd3'])
+    // A later refresh: already marked seen, still on show this run.
+    const again = archivedNotice(gone, first.seen, first.shown)
+    expect(again.shown.map(c => c.id)).toEqual([2])
+    // The next launch starts with nothing on show: it doesn't come back.
+    expect(archivedNotice(gone, again.seen, []).shown).toEqual([])
+  })
+
+  it('forgets a folder that came back, so losing it again is news', () => {
+    const back = archivedNotice([row(3, { archived: true })], ['d2', 'd3'], [row(2, { archived: true })])
+    expect(back.seen).toEqual(['d3'])
+    expect(back.shown).toEqual([])
+    expect(archivedNotice([row(2, { archived: true }), row(3, { archived: true })], back.seen, []).shown.map(c => c.id)).toEqual([2])
   })
 
   it('tells conversation apart from what Claude Code stored around it', () => {
