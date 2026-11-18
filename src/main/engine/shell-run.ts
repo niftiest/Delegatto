@@ -53,11 +53,18 @@ export function shellRunBlocks(runs: ShellRun[]): ContentBlock[] {
   })
 }
 
+/** After the shell exits, how long to wait for the last of its output. Something it
+ *  started (a browser, a sign-in helper, `x &`) can hold the pipe open for good. */
+const AFTER_EXIT_MS = 2000
+/** How long Stop waits for the kill to take before clearing the run anyway. */
+const STOP_GRACE_MS = 3000
+
 export interface ShellChild {
-  stdout: NodeJS.ReadableStream
-  stderr: NodeJS.ReadableStream
+  stdout: NodeJS.ReadableStream & { destroy?: () => void }
+  stderr: NodeJS.ReadableStream & { destroy?: () => void }
   pid?: number
   on(event: 'error', cb: (err: Error) => void): unknown
+  on(event: 'exit', cb: (code: number | null) => void): unknown
   on(event: 'close', cb: (code: number | null) => void): unknown
 }
 
@@ -88,6 +95,10 @@ export class ShellRunner {
   private readonly pids = new Map<string, number>()
   private readonly stopping = new Set<string>()
   private readonly timers = new Map<number, ReturnType<typeof setTimeout>>()
+  /** Per run: when to finish it anyway (after the shell exits, or after Stop). */
+  private readonly deadlines = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Per run: lets go of its output pipes. */
+  private readonly release = new Map<string, () => void>()
   private readonly deps: ShellRunnerDeps
 
   constructor(deps: ShellRunnerDeps) {
@@ -120,22 +131,40 @@ export class ShellRunner {
     }
     if (child.pid !== undefined) this.pids.set(run.id, child.pid)
     const append = (chunk: Buffer | string): void => {
+      if (run.state !== 'running') return
       run.output = clipMiddle(run.output + chunk.toString(), MAX_OUTPUT_CHARS)
       this.announce(sessionPk, false)
     }
+    // Stop listening once the run is over, whatever still holds the pipes.
+    this.release.set(run.id, () => { child.stdout.destroy?.(); child.stderr.destroy?.() })
     child.stdout.on('data', append)
     child.stderr.on('data', append)
     child.on('error', err => this.finish(run, null, `Couldn't start the command: ${err.message}`))
     child.on('close', code => this.finish(run, code))
+    child.on('exit', code => {
+      // The shell is gone, so there is nothing left for Stop to end.
+      this.pids.delete(run.id)
+      this.later(run.id, () => this.finish(run, code), AFTER_EXIT_MS)
+    })
     return run
   }
 
   stop(id: string): void {
     const run = this.runs.find(r => r.id === id)
-    const pid = this.pids.get(id)
-    if (run === undefined || run.state !== 'running' || pid === undefined) return
+    if (run === undefined || run.state !== 'running' || this.stopping.has(id)) return
     this.stopping.add(id)
+    const pid = this.pids.get(id)
+    if (pid === undefined) { this.finish(run, null); return }
     ;(this.deps.killTree ?? defaultKillTree)(pid)
+    // A kill that doesn't take, or a pipe something else keeps open, can't keep it on screen.
+    this.later(id, () => this.finish(run, null), STOP_GRACE_MS)
+  }
+
+  private later(id: string, fn: () => void, ms: number): void {
+    if (this.deadlines.has(id)) return
+    const t = setTimeout(() => { this.deadlines.delete(id); fn() }, ms)
+    t.unref?.()
+    this.deadlines.set(id, t)
   }
 
   /** "Leave out": the run won't go to Claude, and goes away. */
@@ -164,6 +193,8 @@ export class ShellRunner {
     for (const run of this.runs) this.stop(run.id)
     for (const t of this.timers.values()) clearTimeout(t)
     this.timers.clear()
+    for (const t of this.deadlines.values()) clearTimeout(t)
+    this.deadlines.clear()
   }
 
   private finish(run: ShellRun, code: number | null, message?: string): void {
@@ -172,6 +203,10 @@ export class ShellRunner {
     run.state = this.stopping.delete(run.id) ? 'stopped' : 'done'
     run.exitCode = run.state === 'done' ? code : null
     this.pids.delete(run.id)
+    const deadline = this.deadlines.get(run.id)
+    if (deadline !== undefined) { clearTimeout(deadline); this.deadlines.delete(run.id) }
+    this.release.get(run.id)?.()
+    this.release.delete(run.id)
     this.save()
     this.announce(run.sessionPk, true)
     if (run.state === 'done') this.deps.onFinished?.(run)

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -12,9 +12,13 @@ import type { ShellRun } from '../src/shared/shell-run-types'
 import { imageSourceUrl } from '../src/renderer/lib'
 import { SessionPool } from '../src/main/engine/pool'
 
+class FakeStream extends EventEmitter {
+  destroyed = false
+  destroy(): void { this.destroyed = true }
+}
 class FakeShell extends EventEmitter {
-  stdout = new EventEmitter()
-  stderr = new EventEmitter()
+  stdout = new FakeStream()
+  stderr = new FakeStream()
   pid = 7
 }
 
@@ -66,6 +70,37 @@ describe('! commands', () => {
     expect(r.list(1)[0]).toMatchObject({ state: 'stopped', exitCode: null })
     r.stop('r1')
     expect(killed).toEqual([7])
+  })
+
+  it('finishes when the shell exits, even if something it started keeps the output open', () => {
+    vi.useFakeTimers()
+    try {
+      const { r, shells, finished } = runner()
+      r.run(1, 'C:\\p', 'az login')
+      shells[0]!.stdout.emit('data', 'opening a browser\n')
+      shells[0]!.emit('exit', 0) // no 'close': a leftover process still holds the pipe
+      expect(r.list(1)[0]!.state).toBe('running')
+      vi.advanceTimersByTime(2000)
+      expect(r.list(1)[0]).toMatchObject({ state: 'done', exitCode: 0, output: 'opening a browser\n' })
+      expect(finished).toEqual(['r1'])
+      expect(shells[0]!.stdout.destroyed).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('lets Stop clear a run whose shell has already gone, or that never answers the kill', () => {
+    vi.useFakeTimers()
+    try {
+      const { r, shells, finished } = runner()
+      r.run(1, 'C:\\p', 'az login')
+      shells[0]!.emit('exit', null)
+      r.stop('r1')
+      expect(r.list(1)[0]!.state).toBe('stopped')
+      r.run(1, 'C:\\p', 'hang')
+      r.stop('r2') // the kill is sent, but nothing ever comes back
+      vi.advanceTimersByTime(3000)
+      expect(r.list(1)[1]!.state).toBe('stopped')
+      expect(finished).toEqual([])
+    } finally { vi.useRealTimers() }
   })
 
   it('announces a command that ran to its end, even a failed one, but not a stopped one', () => {
