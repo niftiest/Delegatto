@@ -730,7 +730,9 @@ body { margin:0; background:var(--bg); color:var(--tx);
 .hljs-title, .hljs-section, .hljs-name, .hljs-function .hljs-title { color:var(--hl-title); }
 .hljs-variable, .hljs-attr, .hljs-params, .hljs-template-variable { color:var(--hl-variable); }
 .bubble-claude.streaming .md { display:inline; }
-.bubble-claude.streaming .md > :last-child { display:inline; }
+/* The caret follows the last line of text. Only a paragraph can run on to it: a list, quote or
+   heading made inline loses its indent and markers, which then hang outside the bubble. */
+.bubble-claude.streaming .md > p:last-child { display:inline; }
 .shell-output-card { padding:0; }
 .shell-output-summary { display:flex; align-items:center; gap:10px; padding:8px 14px; cursor:pointer; list-style:none; font-size:12.5px; }
 .shell-output-summary::-webkit-details-marker { display:none; }
