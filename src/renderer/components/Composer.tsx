@@ -85,7 +85,14 @@ function lockHolder(lock: ExternalLock): string {
   return `${who} (PID ${lock.pid})`
 }
 
-export function Composer({ sessionPk, running, focused = true, settled = false, shellStops = 0, onCycleMode, lock = null, syncing = null, cwd = null, suggestion = null, agents = null, skills = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange }: {
+/** What Enter and Esc do while Claude works. */
+export function runningHint(queued: number): string {
+  return queued > 0
+    ? 'Claude reads queued messages at its next step · Esc takes the last one back'
+    : 'Enter queues for Claude\'s next step · Esc stops'
+}
+
+export function Composer({ sessionPk, running, focused = true, settled = false, shellStops = 0, onCycleMode, lock = null, syncing = null, cwd = null, suggestion = null, agents = null, skills = null, onHijack, onShellCommand, initialDraft, onDraftChange, onSend, onSubmit, onInterrupt, onRewind, onCancelSending, onQueueLengthChange, onRunHint }: {
   /** True while a turn is in flight for this session. Enter queues instead
    *  of sending, and Esc interrupts, only while this is true. */
   running: boolean
@@ -143,6 +150,9 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
    *  surfaced). Optional: a Composer with no listener works exactly as
    *  before. */
   onQueueLengthChange?: (count: number) => void
+  /** The keys' note while Claude works ("Enter queues · Esc stops"), or null. The chat shows
+   *  it at the right of the working line, so it doesn't push the box up. */
+  onRunHint?: (hint: string | null) => void
   sessionPk: number
 }) {
   const [text, setText] = useState(initialDraft ?? '')
@@ -323,6 +333,9 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
     const timer = setTimeout(() => setQueueNote(null), 4000)
     return () => clearTimeout(timer)
   }, [queueNote])
+  const runHint = running ? queueNote ?? runningHint(queue.length) : null
+  useEffect(() => { onRunHint?.(runHint) }, [runHint, onRunHint])
+  useEffect(() => () => onRunHint?.(null), [onRunHint])
   // A message that never reached Claude comes back ahead of anything typed since.
   // With the chat shown twice, only one box takes it.
   useEffect(() => {
@@ -759,13 +772,6 @@ export function Composer({ sessionPk, running, focused = true, settled = false, 
       </div>
       {onShellCommand !== undefined && text.trimStart().startsWith('!') && (
         <div className="composer-hint">{running ? 'Runs in a shell in this folder when Claude finishes. Claude then sees the output and replies.' : 'Runs in a shell in this folder. Claude then sees the output and replies.'}</div>
-      )}
-      {running && (
-        <div className="composer-hint" aria-hidden="true">
-          {queueNote ?? (queue.length > 0
-            ? 'Claude reads queued messages at its next step · Esc takes the last one back'
-            : 'Enter queues for Claude\'s next step · Esc stops')}
-        </div>
       )}
       {ultracode.length > 0 && <div className="composer-hint composer-keyword-hint" role="status">“ultracode” asks Claude to run a multi-agent workflow for this message, which uses many more tokens. Put it in quotes to send it as a plain word.</div>}
       {clearHint && <div className="composer-hint" role="status">Esc again to clear</div>}

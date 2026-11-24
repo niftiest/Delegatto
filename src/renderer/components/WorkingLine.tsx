@@ -69,7 +69,7 @@ export function SubagentsLive({ runs, onView }: { runs: AgentRun[]; onView: (too
   )
 }
 
-export function WorkingLine({ startedAt, tokens, pending, lastActivity, status, waitingOnYou, activity = null }: {
+export function WorkingLine({ startedAt, tokens, pending, lastActivity, status, waitingOnYou, activity = null, hint = null }: {
   startedAt: number
   tokens: number
   /** This turn's tool calls still waiting for a result. */
@@ -80,6 +80,8 @@ export function WorkingLine({ startedAt, tokens, pending, lastActivity, status, 
   waitingOnYou: boolean
   /** Something holding the turn up: an API retry, or a hook running. */
   activity?: string | null
+  /** What Enter and Esc do meanwhile, at the right of the line. */
+  hint?: string | null
 }) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -92,8 +94,11 @@ export function WorkingLine({ startedAt, tokens, pending, lastActivity, status, 
     : pickVerb(startedAt)
   const details = workingDetails({ now, startedAt, tokens, pending, lastActivity, quiet: waitingOnYou || status !== null || activity !== null })
   return (
-    <div className="working-line" role="status">
-      <span className="working-star" aria-hidden="true">✻</span> {label}… <span className="working-details">({details.join(' · ')})</span>
+    <div className="working-line working-line-split">
+      <span className="working-line-main" role="status">
+        <span className="working-star" aria-hidden="true">✻</span> {label}… <span className="working-details">({details.join(' · ')})</span>
+      </span>
+      {hint !== null && <span className="working-line-hint" title={hint}>{hint}</span>}
     </div>
   )
 }

@@ -212,6 +212,8 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
   // LiveIndicator's 'queued' vs 'streaming' badge -- the queue's actual
   // add/remove/reorder state stays owned by Composer itself.
   const [queuedCount, setQueuedCount] = useState(0)
+  // The message box's note on Enter and Esc while Claude works, shown on the working line.
+  const [runHint, setRunHint] = useState<string | null>(null)
   // A process outside Delegatto (a terminal) holding the OPEN chat -- while
   // set, the composer is read-only. Seeded on open via api.getLock, then kept
   // current by engine:lockChanged.
@@ -1223,7 +1225,8 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
         )}
         {running && (
           <WorkingLine startedAt={turnStartedAt} tokens={turnTokens} status={liveStatus} pending={pending} lastActivity={lastEventAt}
-            waitingOnYou={(permissionsByPk.get(session.id)?.length ?? 0) > 0 || (elicitations.get(session.id)?.length ?? 0) > 0} activity={liveActivity} />
+            waitingOnYou={(permissionsByPk.get(session.id)?.length ?? 0) > 0 || (elicitations.get(session.id)?.length ?? 0) > 0} activity={liveActivity}
+            hint={archived ? null : runHint} />
         )}
         <SubagentsLive runs={agentRunsByPk.get(session.id) ?? NO_AGENT_RUNS} onView={setSubagentOpen} />
         <BackgroundTasksLine tasks={backgroundTasks} running={running} onStop={id => { void api.stopTask(session.id, id) }} onShowOutput={(id, title) => setTaskOutputOpen({ id, title })} />
@@ -1286,7 +1289,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
               draftsRef.current.set(session.id, text)
               refreshUpdateHold()
             }}
-            onSend={onSend} onSubmit={() => setTerminalNotice(null)} onInterrupt={onInterrupt} onRewind={() => setRewindOpen(true)} onCancelSending={onCancelSending} onQueueLengthChange={setQueuedCount} />
+            onSend={onSend} onSubmit={() => setTerminalNotice(null)} onInterrupt={onInterrupt} onRewind={() => setRewindOpen(true)} onCancelSending={onCancelSending} onQueueLengthChange={setQueuedCount} onRunHint={setRunHint} />
         )}
         {railNode !== false && railSlot !== null && createPortal(railNode, railSlot)}
     </OpenSubagentContext.Provider>
