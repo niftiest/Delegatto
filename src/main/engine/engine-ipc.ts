@@ -1,6 +1,6 @@
 import { listPins, pinMessage, unpinMessage } from '../catalog/pins'
 import { markRewoundFrom } from './chat-actions'
-import { PlanUsageTracker, planDisplayName } from './plan-usage'
+import { PlanUsageTracker, nextPlanCheck, planDisplayName } from './plan-usage'
 import { app, dialog, ipcMain, type BrowserWindow, type WebContents, shell } from 'electron'
 import type { WindowHub } from '../window-hub'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -611,12 +611,35 @@ export function registerEngineIpc(db: Catalog, hub: WindowHub, hooks: EngineHook
   const planName = (): string | null => {
     try { return planDisplayName(readFileSync(join(process.env.CLAUDE_CONFIG_DIR ?? homedir(), '.claude.json'), 'utf8')) } catch { return null }
   }
-  const planUsageRefresh = (): void => {
-    claudeInfo.planUsage(homedir()).then(a => planUsage.applyAnswer(a, planName())).catch(err => console.warn('[engine] plan usage check failed', err))
+  // Read at launch, then again on a schedule: quickly while no windows have come back
+  // (the usage service can be busy), every 10 minutes after. Each read is a brief process.
+  let planCheck: ReturnType<typeof setTimeout> | undefined
+  let planMisses = 0
+  let planChecking = false
+  let planStopped = false
+  const schedulePlanCheck = (ms: number): void => {
+    if (planStopped) return
+    clearTimeout(planCheck)
+    planCheck = setTimeout(planUsageRefresh, ms)
+    planCheck.unref?.()
+  }
+  function planUsageRefresh(): void {
+    if (planChecking) return
+    planChecking = true
+    void claudeInfo.planUsage(homedir())
+      .then(a => {
+        const got = planUsage.applyAnswer(a, planName())
+        if (!got || planMisses > 0) console.log(`[engine] plan usage: ${PlanUsageTracker.describe(a)}`)
+        return got
+      }, err => { console.warn('[engine] plan usage check failed', err); return false })
+      .then(got => {
+        planMisses = got ? 0 : planMisses + 1
+        planChecking = false
+        schedulePlanCheck(nextPlanCheck(got, planMisses))
+      })
   }
   // Left until the app has settled: nothing depends on it, and it starts a process.
-  const planCheck = setTimeout(planUsageRefresh, PLAN_CHECK_DELAY_MS)
-  planCheck.unref?.()
+  schedulePlanCheck(PLAN_CHECK_DELAY_MS)
   const folderOrHome =(cwd: string | null): string => cwd !== null && cwd.length > 0 && existsSync(cwd) ? cwd : homedir()
   const errorText = (err: unknown): string => err instanceof Error ? err.message : String(err)
   const chatMcpStatus = async (sessionPk: number): Promise<McpServerStatus[] | null> => {
@@ -1062,6 +1085,7 @@ export function registerEngineIpc(db: Catalog, hub: WindowHub, hooks: EngineHook
       ipcMain.removeHandler(ENGINE_IPC.planUsage)
       for (const ch of [ENGINE_IPC.loginState, ENGINE_IPC.loginStart, ENGINE_IPC.loginSubmitCode, ENGINE_IPC.loginCancel]) ipcMain.removeHandler(ch)
       login.cancel()
+      planStopped = true
       clearTimeout(planCheck)
       ipcMain.removeHandler(ENGINE_IPC.clearChat)
       ipcMain.removeHandler(ENGINE_IPC.claudeInfo)

@@ -45,13 +45,16 @@ export class PlanUsageTracker {
    *  leaves earlier readings alone; only "limits don't apply" clears them.
    *  `displayName` is the plan's own name ("Ultra"), which `subscription_type` lacks:
    *  it has only pro, max, team and enterprise. Used only on a plan, as Claude Code does. */
-  applyAnswer(raw: unknown, displayName: string | null = null): void {
-    if (!isObj(raw)) return
+  applyAnswer(raw: unknown, displayName: string | null = null): boolean {
+    if (!isObj(raw)) return false
     const type = typeof raw.subscription_type === 'string' && raw.subscription_type.length > 0 ? raw.subscription_type : null
     const plan = type === null ? null : displayName ?? type
-    if (raw.rate_limits_available === false) {
+    // Off a plan (an API key, Bedrock, Vertex) limits don't apply. On a plan, "unavailable"
+    // only means this login can't read them (a token without the profile scope): the
+    // plan still has limits, and every reply still reports them.
+    if (raw.rate_limits_available === false && type === null) {
       this.set({ ...NO_PLAN_USAGE, plan, limitsApply: false })
-      return
+      return false
     }
     const limits = isObj(raw.rate_limits) ? raw.rate_limits : {}
     const fiveHour = usageWindow(limits.five_hour)
@@ -59,11 +62,22 @@ export class PlanUsageTracker {
     this.set({
       ...this.usage,
       plan,
-      limitsApply: raw.rate_limits_available === true ? true : this.usage.limitsApply,
+      limitsApply: raw.rate_limits_available === true || type !== null ? true : this.usage.limitsApply,
       fiveHour: fiveHour ?? this.usage.fiveHour,
       sevenDay: sevenDay ?? this.usage.sevenDay,
       updatedAt: fiveHour !== null || sevenDay !== null ? this.now() : this.usage.updatedAt
     })
+    return fiveHour !== null || sevenDay !== null
+  }
+
+  /** What one `get_usage` answer said, for the log: why there were no windows, if there weren't. */
+  static describe(raw: unknown): string {
+    if (!isObj(raw)) return 'no answer'
+    const plan = typeof raw.subscription_type === 'string' ? raw.subscription_type : 'none'
+    if (raw.rate_limits_available === false) return `plan ${plan}; this login can't read its limits`
+    if (!isObj(raw.rate_limits)) return `plan ${plan}; the usage service didn't answer`
+    const l = raw.rate_limits
+    return `plan ${plan}; 5-hour ${usageWindow(l.five_hour)?.percent ?? 'none'}, week ${usageWindow(l.seven_day)?.percent ?? 'none'}`
   }
 
   private set(next: PlanUsage): void {
@@ -73,6 +87,18 @@ export class PlanUsageTracker {
     }
     for (const cb of this.listeners) cb(next)
   }
+}
+
+/** How often the plan's usage is read again while the app runs, so use elsewhere (the
+ *  terminal, another PC, claude.ai) shows without starting a chat. */
+export const PLAN_REFRESH_MS = 10 * 60_000
+/** After a check that got no windows: sooner at first, then the usual pace. */
+const PLAN_RETRY_MS = [30_000, 2 * 60_000, 5 * 60_000]
+
+/** When to read the plan's usage next, after a check that did (`got`) or didn't get its windows.
+ *  `misses` counts the checks in a row that didn't, this one included. */
+export function nextPlanCheck(got: boolean, misses: number): number {
+  return got ? PLAN_REFRESH_MS : PLAN_RETRY_MS[misses - 1] ?? PLAN_REFRESH_MS
 }
 
 /** The plan's name as Claude Code shows it, from the account it keeps in

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseEvent } from '../src/main/engine/events'
-import { PlanUsageTracker, planDisplayName } from '../src/main/engine/plan-usage'
+import { PLAN_REFRESH_MS, PlanUsageTracker, nextPlanCheck, planDisplayName } from '../src/main/engine/plan-usage'
 import { currentWindow, planLabel, showsPlan, NO_PLAN_USAGE } from '../src/shared/plan-usage'
 
 // Shapes copied from Claude Code 2.1.316's real output on a Max plan.
@@ -102,6 +102,30 @@ describe('PlanUsageTracker', () => {
     expect(t.get().plan).toBe('max')
     t.applyAnswer(apiKeyAnswer, 'Ultra')
     expect(t.get().plan).toBeNull()
+  })
+
+  it("keeps a plan's limits on show when this login can't read them", () => {
+    const t = new PlanUsageTracker(null)
+    t.applyReading({ sevenDay: { percent: 12, resetsAt: 9 } })
+    const got = t.applyAnswer({ ...realAnswer, subscription_type: 'team', rate_limits_available: false, rate_limits: null })
+    expect(got).toBe(false)
+    expect(t.get()).toMatchObject({ plan: 'team', limitsApply: true, sevenDay: { percent: 12 } })
+    expect(showsPlan(t.get())).toBe(true)
+  })
+
+  it('says whether an answer brought the windows, and why not', () => {
+    const t = new PlanUsageTracker(null)
+    expect(t.applyAnswer(realAnswer)).toBe(true)
+    expect(t.applyAnswer(beforeAnyReply)).toBe(false)
+    expect(PlanUsageTracker.describe(beforeAnyReply)).toContain("usage service didn't answer")
+    expect(PlanUsageTracker.describe({ ...realAnswer, rate_limits_available: false })).toContain("can't read its limits")
+    expect(PlanUsageTracker.describe(realAnswer)).toBe('plan max; 5-hour 30, week 3')
+  })
+
+  it('reads again soon after a miss, then every 10 minutes', () => {
+    expect([1, 2, 3, 4, 9].map(n => nextPlanCheck(false, n))).toEqual([30_000, 120_000, 300_000, PLAN_REFRESH_MS, PLAN_REFRESH_MS])
+    expect(nextPlanCheck(true, 0)).toBe(PLAN_REFRESH_MS)
+    expect(PLAN_REFRESH_MS).toBe(600_000)
   })
 
   it('starts empty when the saved file is missing or broken', () => {
