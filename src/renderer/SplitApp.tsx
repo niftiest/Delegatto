@@ -3,7 +3,7 @@ import { api } from './api'
 import type { ChannelRow, SessionSummary } from '../shared/types'
 import type { MainAction } from '../shared/ipc'
 import {
-  clampRatios, defaultRatios, focusShortcut, gridTemplate, layoutRows, nudgeRatios, paneCount, paneShowing, shownProjects, splitTitle,
+  clampRatios, defaultRatios, focusShortcut, gridTemplate, layoutRows, nudgeRatios, paneCount, paneShowing, shownProjects, shrinkLayout, splitTitle, withoutSlot,
   type SplitLayout, type SplitPane, type SplitRatios, type SplitState
 } from '../shared/split-view'
 import { useAppData } from './app-data'
@@ -323,6 +323,14 @@ export function SplitApp() {
     // The panes the user kept go with the layout, so main doesn't pick its own to close.
     await api.splitViewSetLayout(to, next)
   }
+  /** An empty slot's ✕: the layout steps down one pane, without that slot. From a single
+   *  pane, the window closes. */
+  const onCloseSlot = (index: number): void => {
+    const to = shrinkLayout(layout)
+    if (to === null) { window.close(); return }
+    setFocusedIndex(f => Math.max(0, f > index ? f - 1 : Math.min(f, paneCount(to) - 1)))
+    void api.splitViewSetLayout(to, withoutSlot(panesRef.current, index)).catch(pickFailed)
+  }
   /** An empty slot's Select project, or a pane's Replace. Its own project may be picked again. */
   const onPickSlot = (index: number): void => {
     setPickRun({
@@ -468,7 +476,7 @@ export function SplitApp() {
         <div className="split-strip-title">{splitTitle(names)}</div>
         <StripUsage usage={data.planUsage} />
       </div>
-      <div className="split-grid" ref={gridRef}
+      <div className="split-grid" ref={gridRef} data-layout={layout}
         style={{ gridTemplateColumns: template.columns, gridTemplateRows: template.rows, gridTemplateAreas: template.areas.join(' ') }}>
         {split !== null && panes.map((pane, i) => {
           const project = projectOf(pane)
@@ -482,6 +490,11 @@ export function SplitApp() {
               node: (
                 <section key={`empty-${i}`} data-pane={i} className={`${slotClass} split-empty`}
                   style={{ gridArea: area }} onPointerDownCapture={() => setFocusedIndex(i)}>
+                  <button type="button" className="split-pane-btn split-empty-close"
+                    title={shrinkLayout(layout) === null ? 'Close the window' : 'Remove this pane'}
+                    aria-label={shrinkLayout(layout) === null ? 'Close the window' : 'Remove this pane'} onClick={() => onCloseSlot(i)}>
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeLinecap="round" /></svg>
+                  </button>
                   <button type="button" className="btn-primary split-select-project" onClick={() => onPickSlot(i)}>
                     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                     Select project
@@ -533,7 +546,7 @@ export function SplitApp() {
             )
           }
         }).sort((x, y) => x.order[0]! - y.order[0]! || x.order[1]! - y.order[1]!).map(x => x.node)}
-        {split !== null && size !== null && (
+        {split !== null && size !== null && layout !== 'single' && (
           <>
             <Resizer label={layout === 'thirds' ? 'Resize the left columns' : 'Resize the columns'} className="split-divider split-divider-col"
               style={{ left: ratios.col * size.width - 3, top: 0, height: size.height }}

@@ -56,6 +56,8 @@ export function SplitLauncher({ session, project, channels, settings }: {
       return
     }
     const first: SplitPane = { sessionPk: session.id, projectDir: project.dirName }
+    // One chat on its own: this one, popped out, with nothing to pick.
+    if (paneCount(to) === 1) { await api.splitViewOpen(to, [first]); return }
     setRun({
       layout: to, startIndex: 1, count: paneCount(to) - 1, exclude: [project.dirName],
       done: picked => void api.splitViewOpen(to, [first, ...picked]).catch(fail)

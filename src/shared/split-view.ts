@@ -2,13 +2,16 @@
 // placed, how divider positions are kept within sane limits, and how the
 // saved state is read back. Pure, so the main process and the renderer share it.
 
-export type SplitLayout = 'halves' | 'wide-narrow' | 'thirds' | 'one-two' | 'grid'
+export type SplitLayout = 'single' | 'halves' | 'wide-narrow' | 'thirds' | 'one-two' | 'grid'
 
 /** In the order the layout menu shows them. */
-export const SPLIT_LAYOUTS: readonly SplitLayout[] = ['halves', 'wide-narrow', 'thirds', 'one-two', 'grid']
+export const SPLIT_LAYOUTS: readonly SplitLayout[] = ['single', 'halves', 'wide-narrow', 'thirds', 'one-two', 'grid']
 
 /** Smallest size a pane may be dragged down to. */
 export const MIN_PANE = { width: 360, height: 280 }
+/** One chat on its own can go narrower: it's for a strip beside another app, such as a
+ *  quarter of a 150% screen, and there's no other pane to keep room for. */
+export const MIN_SINGLE_WIDTH = 300
 
 /** Where the dividers sit, each as a share of the window from its left or top edge. `col` is
  *  the first column divider; `row` is the row divider on the side that splits (unused by the
@@ -30,15 +33,31 @@ export type SplitState = {
   open: boolean
 }
 
-const PANES: Record<SplitLayout, 2 | 3 | 4> = { halves: 2, 'wide-narrow': 2, thirds: 3, 'one-two': 3, grid: 4 }
+const PANES: Record<SplitLayout, 1 | 2 | 3 | 4> = { single: 1, halves: 2, 'wide-narrow': 2, thirds: 3, 'one-two': 3, grid: 4 }
 
-export function paneCount(layout: SplitLayout): 2 | 3 | 4 {
+export function paneCount(layout: SplitLayout): 1 | 2 | 3 | 4 {
   return PANES[layout]
 }
 
 /** How many columns of panes the layout has side by side at its widest. */
-export function layoutColumns(layout: SplitLayout): 2 | 3 {
-  return layout === 'thirds' ? 3 : 2
+export function layoutColumns(layout: SplitLayout): 1 | 2 | 3 {
+  return layout === 'single' ? 1 : layout === 'thirds' ? 3 : 2
+}
+
+/** The layout an empty pane's ✕ steps down to: one pane fewer, keeping the shape where it can.
+ *  Null from a single pane, whose ✕ closes the window. */
+export function shrinkLayout(layout: SplitLayout): SplitLayout | null {
+  switch (layout) {
+    case 'grid': return 'one-two'
+    case 'one-two': case 'thirds': return 'halves'
+    case 'halves': case 'wide-narrow': return 'single'
+    case 'single': return null
+  }
+}
+
+/** The panes once slot `index` is taken out, for the layout one pane smaller. */
+export function withoutSlot(panes: readonly SplitPane[], index: number): SplitPane[] {
+  return panes.filter((_, i) => i !== index)
 }
 
 /** How many rows of panes the layout has stacked at its tallest. */
@@ -70,6 +89,7 @@ function clampThirds(ratios: SplitRatios, total: number, min: number): { col: nu
 }
 
 export function clampRatios(layout: SplitLayout, ratios: SplitRatios, size: { width: number; height: number }): SplitRatios {
+  if (layout === 'single') return ratios
   const row = layoutRows(layout) > 1 ? clampShare(ratios.row, size.height, MIN_PANE.height) : ratios.row
   if (layout === 'thirds') return { ...clampThirds(ratios, size.width, MIN_PANE.width), row }
   return { col: clampShare(ratios.col, size.width, MIN_PANE.width), row }
@@ -143,6 +163,7 @@ export function paneShowing(panes: SplitPane[], projectDir: string, except: numb
 }
 
 export function gridTemplate(layout: SplitLayout, ratios: SplitRatios): { columns: string; rows: string; areas: string[] } {
+  if (layout === 'single') return { columns: '1fr', rows: '1fr', areas: ['"p1"'] }
   if (layout === 'thirds') {
     const ordered = ratios.col2 !== undefined && ratios.col2 > ratios.col
     const [c1, c2] = ordered ? [ratios.col, ratios.col2!] : [1 / 3, 2 / 3]

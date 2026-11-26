@@ -117,13 +117,37 @@ describe('SplitApp', () => {
     expect(fake.fn('splitViewSwap')).toHaveBeenCalledWith(1, 0)
   })
 
+  it("an empty slot's ✕ steps the layout down one pane, without that slot", async () => {
+    await mountSplit({ ...STATE, panes: [STATE.panes[0]!, null, STATE.panes[1]!] })
+    fake.override({ splitViewSetLayout: () => Promise.resolve() })
+    fireEvent.click(within(pane(1)).getByRole('button', { name: 'Remove this pane' }))
+    await flush()
+    expect(fake.fn('splitViewSetLayout')).toHaveBeenCalledWith('halves', [STATE.panes[0], STATE.panes[1]])
+  })
+
+  it("a single empty pane's ✕ closes the window", async () => {
+    await mountSplit({ ...STATE, layout: 'single', panes: [null] })
+    const close = vi.spyOn(window, 'close').mockImplementation(() => {})
+    fireEvent.click(within(pane(0)).getByRole('button', { name: 'Close the window' }))
+    expect(close).toHaveBeenCalled()
+    close.mockRestore()
+  })
+
+  it('shows one chat on its own, with no divider', async () => {
+    await mountSplit({ ...STATE, layout: 'single', panes: [STATE.panes[0]!] })
+    expect(boxIn(0)).toBeTruthy()
+    expect(document.querySelector('[data-pane="1"]')).toBeNull()
+    expect(document.querySelector('.split-divider')).toBeNull()
+  })
+
   it('an empty slot shows one Select project button, in the middle of the slot', async () => {
     await mountSplit()
     const empty = pane(2)
     expect(empty.classList.contains('split-empty')).toBe(true)
     const button = within(empty).getByRole('button', { name: 'Select project' })
     expect(button.querySelector('svg path')?.getAttribute('d')).toBe('M8 3v10M3 8h10')
-    expect(within(empty).getAllByRole('button')).toEqual([button])
+    // Beside it, only the ✕ that takes the slot out of the layout.
+    expect(within(empty).getAllByRole('button')).toEqual([within(empty).getByRole('button', { name: 'Remove this pane' }), button])
 
     // The window's own stylesheet centers it.
     const style = document.createElement('style')

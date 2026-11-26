@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import {
   SPLIT_LAYOUTS, paneCount, layoutColumns, layoutRows, defaultRatios, clampRatios, gridTemplate, coerceSplitState, splitTitle,
-  focusShortcut, nudgeRatios, sameProjectDir, rearrange, panesToClose, shownProjects, paneShowing, swapPanes
+  focusShortcut, nudgeRatios, sameProjectDir, rearrange, panesToClose, shownProjects, paneShowing, swapPanes, shrinkLayout, withoutSlot
 } from '../src/shared/split-view'
 
 describe('split layouts', () => {
   it('counts panes', () => {
-    expect(SPLIT_LAYOUTS).toEqual(['halves', 'wide-narrow', 'thirds', 'one-two', 'grid'])
-    expect(SPLIT_LAYOUTS.map(paneCount)).toEqual([2, 2, 3, 3, 4])
+    expect(SPLIT_LAYOUTS).toEqual(['single', 'halves', 'wide-narrow', 'thirds', 'one-two', 'grid'])
+    expect(SPLIT_LAYOUTS.map(paneCount)).toEqual([1, 2, 2, 3, 3, 4])
   })
   it('knows how many columns and rows each layout has', () => {
-    expect(SPLIT_LAYOUTS.map(layoutColumns)).toEqual([2, 2, 3, 2, 2])
-    expect(SPLIT_LAYOUTS.map(layoutRows)).toEqual([1, 1, 1, 2, 2])
+    expect(SPLIT_LAYOUTS.map(layoutColumns)).toEqual([1, 2, 2, 3, 2, 2])
+    expect(SPLIT_LAYOUTS.map(layoutRows)).toEqual([1, 1, 1, 1, 2, 2])
   })
   it('has the spec defaults', () => {
     expect(defaultRatios('halves').col).toBe(0.5)
@@ -266,5 +266,43 @@ describe('swapping two panes', () => {
     expect(swapPanes([a, b], 0, 2)).toEqual([a, b])
     expect(swapPanes([a, b], -1, 0)).toEqual([a, b])
     expect(swapPanes([a, b], 0.5, 1)).toEqual([a, b])
+  })
+})
+
+describe('one chat on its own', () => {
+  it('is a layout of one pane, with no dividers', () => {
+    expect(SPLIT_LAYOUTS[0]).toBe('single')
+    expect(paneCount('single')).toBe(1)
+    expect(layoutColumns('single')).toBe(1)
+    expect(layoutRows('single')).toBe(1)
+    expect(gridTemplate('single', defaultRatios('single'))).toEqual({ columns: '1fr', rows: '1fr', areas: ['"p1"'] })
+    const r = { col: 0.2, row: 0.5 }
+    expect(clampRatios('single', r, { width: 400, height: 300 })).toBe(r)
+  })
+
+  it('survives a restart', () => {
+    const s = coerceSplitState({ layout: 'single', panes: [{ sessionPk: 5, projectDir: 'D--a' }], open: true }, () => true)
+    expect(s).toMatchObject({ layout: 'single', panes: [{ sessionPk: 5, projectDir: 'D--a' }] })
+  })
+})
+
+describe("an empty pane's ✕", () => {
+  it('steps down one pane at a time, then closes the window', () => {
+    expect(shrinkLayout('grid')).toBe('one-two')
+    expect(shrinkLayout('one-two')).toBe('halves')
+    expect(shrinkLayout('thirds')).toBe('halves')
+    expect(shrinkLayout('halves')).toBe('single')
+    expect(shrinkLayout('wide-narrow')).toBe('single')
+    expect(shrinkLayout('single')).toBeNull()
+    for (const l of SPLIT_LAYOUTS) {
+      const to = shrinkLayout(l)
+      if (to !== null) expect(paneCount(to)).toBe(paneCount(l) - 1)
+    }
+  })
+
+  it('takes out only that slot, keeping the rest in order', () => {
+    const a = { sessionPk: 1, projectDir: 'a' }, b = { sessionPk: 2, projectDir: 'b' }
+    expect(withoutSlot([a, null, b], 1)).toEqual([a, b])
+    expect(withoutSlot([null], 0)).toEqual([])
   })
 })

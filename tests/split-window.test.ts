@@ -138,6 +138,7 @@ describe('split window across restarts', () => {
   it('sizes the window for every column and row at its minimum', () => {
     expect(splitMinSize('halves')).toEqual({ width: 720, height: 320 })
     expect(splitMinSize('thirds')).toEqual({ width: 1080, height: 320 })
+    expect(splitMinSize('single')).toEqual({ width: 300, height: 320 })
     expect(splitMinSize('one-two')).toEqual({ width: 720, height: 600 })
     expect(splitMinSize('grid')).toEqual({ width: 720, height: 600 })
   })

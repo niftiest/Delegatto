@@ -5,7 +5,7 @@ import { usableBounds } from './update-resume'
 import type { WindowHub } from './window-hub'
 import { IPC, type MainAction } from '../shared/ipc'
 import {
-  MIN_PANE, SPLIT_LAYOUTS, coerceSplitState, layoutColumns, layoutRows, rearrange, splitTitle, swapPanes,
+  MIN_PANE, MIN_SINGLE_WIDTH, SPLIT_LAYOUTS, coerceSplitState, layoutColumns, layoutRows, rearrange, splitTitle, swapPanes,
   type SplitLayout, type SplitRatios, type SplitState
 } from '../shared/split-view'
 
@@ -36,7 +36,8 @@ export type SplitWindowHandle = {
 
 /** Smallest page that still fits every pane at its minimum size. */
 export function splitMinSize(layout: SplitLayout): { width: number; height: number } {
-  return { width: layoutColumns(layout) * MIN_PANE.width, height: layoutRows(layout) * MIN_PANE.height + STRIP_HEIGHT }
+  const width = layout === 'single' ? MIN_SINGLE_WIDTH : layoutColumns(layout) * MIN_PANE.width
+  return { width, height: layoutRows(layout) * MIN_PANE.height + STRIP_HEIGHT }
 }
 
 type Size = { width: number; height: number }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { SPLIT_LAYOUTS, type SplitLayout } from '../../shared/split-view'
 
 export const LAYOUT_LABELS: Record<SplitLayout, string> = {
+  single: 'One chat on its own',
   halves: 'Two side by side',
   'wide-narrow': 'Wide and narrow',
   thirds: 'Three side by side',
@@ -12,7 +13,8 @@ export const LAYOUT_LABELS: Record<SplitLayout, string> = {
 /** A layout's panes as a small picture. `highlight` marks one pane (the slot being filled). */
 export function LayoutGlyph({ layout, highlight, className }: { layout: SplitLayout; highlight?: number; className?: string }) {
   const cells: Array<[number, number, number, number]> =
-    layout === 'halves' ? [[1, 1, 6.5, 10], [8.5, 1, 6.5, 10]]
+    layout === 'single' ? [[1, 1, 14, 10]]
+      : layout === 'halves' ? [[1, 1, 6.5, 10], [8.5, 1, 6.5, 10]]
       : layout === 'wide-narrow' ? [[1, 1, 8.5, 10], [10.5, 1, 4.5, 10]]
         : layout === 'thirds' ? [[1, 1, 4, 10], [6, 1, 4, 10], [11, 1, 4, 10]]
         : layout === 'one-two' ? [[1, 1, 6.5, 10], [8.5, 1, 6.5, 4.5], [8.5, 6.5, 6.5, 4.5]]
@@ -26,7 +28,7 @@ export function LayoutGlyph({ layout, highlight, className }: { layout: SplitLay
   )
 }
 
-/** The split view button and its dropdown of the five layouts. `current` is the open split
+/** The split view button and its dropdown of the six layouts. `current` is the open split
  *  window's layout, or null when none is open. The header look sits in a chat header beside
  *  the terminal button; the strip look is the split window's own layout button. */
 export function LayoutMenu({ current, onPick, look = 'header' }: {
