@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { api } from './api'
 import type { ChannelRow, SessionSummary } from '../shared/types'
 import type { MainAction } from '../shared/ipc'
@@ -32,6 +32,17 @@ const chatLabel = (s: SessionSummary): string => s.title ?? `Untitled · ${s.ses
 
 /** The split window: 2 to 4 chats side by side, each a full ChatPane, with no nav. App-wide
  *  dialogs open in the main window; a pane's own small dialogs open in the pane. */
+/** The empty pane's header band, sized so its ✕ lands `top` px from the top of the pane, where the
+ *  pane's own ✕ was. One row: centered in a band like a one-row header. Two rows (a narrow pane):
+ *  at the bottom of a band as tall as that wrapped header. Nothing remembered: the usual band. */
+export function emptyHeadStyle(top: number | undefined): CSSProperties | undefined {
+  if (top === undefined || !Number.isFinite(top) || top < 0) return undefined
+  const button = 26, pad = 6
+  return top + button + pad > 52
+    ? { minHeight: top + button + pad, alignItems: 'flex-end' }
+    : { minHeight: top * 2 + button }
+}
+
 export function SplitApp() {
   // Every pane's project's chats, by project id: the chat pickers and the panes' summaries.
   const [sessionsByProject, setSessionsByProject] = useState<ReadonlyMap<number, SessionSummary[]>>(new Map())
@@ -325,9 +336,21 @@ export function SplitApp() {
   }
   /** An empty slot's ✕: the layout steps down one pane, without that slot. From a single
    *  pane, the window closes. */
+  // Where each emptied pane's ✕ was, from the top of the pane, so the empty pane's ✕ lands in the
+  // same spot and a second click without moving the mouse takes the slot out. A pane's header
+  // wraps to two rows when narrow, which moves its ✕ down; this follows it either way.
+  const [closeTops, setCloseTops] = useState<ReadonlyMap<number, number>>(new Map())
+  const rememberClose = (index: number, button: HTMLElement): void => {
+    const pane = button.closest('.split-pane')
+    if (pane === null) return
+    const top = button.getBoundingClientRect().top - pane.getBoundingClientRect().top
+    setCloseTops(prev => new Map(prev).set(index, top))
+  }
   const onCloseSlot = (index: number): void => {
     const to = shrinkLayout(layout)
     if (to === null) { window.close(); return }
+    // The slots after this one move up one.
+    setCloseTops(prev => new Map([...prev].flatMap(([k, v]): Array<[number, number]> => k === index ? [] : [[k > index ? k - 1 : k, v]])))
     setFocusedIndex(f => Math.max(0, f > index ? f - 1 : Math.min(f, paneCount(to) - 1)))
     void api.splitViewSetLayout(to, withoutSlot(panesRef.current, index)).catch(pickFailed)
   }
@@ -490,11 +513,17 @@ export function SplitApp() {
               node: (
                 <section key={`empty-${i}`} data-pane={i} className={`${slotClass} split-empty`}
                   style={{ gridArea: area }} onPointerDownCapture={() => setFocusedIndex(i)}>
-                  <button type="button" className="split-pane-btn split-empty-close"
-                    title={shrinkLayout(layout) === null ? 'Close the window' : 'Remove this pane'}
-                    aria-label={shrinkLayout(layout) === null ? 'Close the window' : 'Remove this pane'} onClick={() => onCloseSlot(i)}>
-                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeLinecap="round" /></svg>
-                  </button>
+                  {/* The same header band a pane has, so the ✕ sits exactly where the pane's own ✕ was. */}
+                  <header className="chead chead-compact split-empty-head" style={emptyHeadStyle(closeTops.get(i))}>
+                    <div className="chead-compact-start" />
+                    <div className="split-pane-buttons">
+                      <button type="button" className="split-pane-btn split-empty-close"
+                        title={shrinkLayout(layout) === null ? 'Close the window' : 'Remove this pane'}
+                        aria-label={shrinkLayout(layout) === null ? 'Close the window' : 'Remove this pane'} onClick={() => onCloseSlot(i)}>
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeLinecap="round" /></svg>
+                      </button>
+                    </div>
+                  </header>
                   <button type="button" className="btn-primary split-select-project" onClick={() => onPickSlot(i)}>
                     <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                     Select project
@@ -542,7 +571,7 @@ export function SplitApp() {
                 if (list !== undefined) setSessionsByProject(prev => new Map(prev).set(project.id, list))
                 else await loadSessions(project.id).catch(() => {})
               }}
-              onReplace={() => onPickSlot(i)} onClose={() => setPane(i, null)} />
+              onReplace={() => onPickSlot(i)} onClose={button => { rememberClose(i, button); setPane(i, null) }} />
             )
           }
         }).sort((x, y) => x.order[0]! - y.order[0]! || x.order[1]! - y.order[1]!).map(x => x.node)}
@@ -603,7 +632,8 @@ function SplitPaneView({ index, project, session, dragging, dropLabel, onGripPoi
   onSessionUpdated: (sessionPk: number, change: (s: SessionSummary) => SessionSummary) => void
   onSessionsChanged: (list?: SessionSummary[]) => Promise<void>
   onReplace: () => void
-  onClose: () => void
+  /** The pane's ✕ was clicked; it's handed over so the empty pane can put its own ✕ there. */
+  onClose: (button: HTMLElement) => void
 }) {
   const rail = useProjectRail(project)
   useEffect(() => { onRail(index, rail) }, [index, rail.pinnedUuids, rail.refreshPins]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -673,7 +703,7 @@ function SplitPaneView({ index, project, session, dragging, dropLabel, onGripPoi
       <button type="button" className="split-pane-btn" title="Replace this pane" aria-label="Replace this pane" onClick={onReplace}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6h9l-2.5-2.5M13 10H4l2.5 2.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </button>
-      <button type="button" className="split-pane-btn" title="Close pane" aria-label="Close pane" onClick={onClose}>
+      <button type="button" className="split-pane-btn" title="Close pane" aria-label="Close pane" onClick={e => onClose(e.currentTarget)}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeLinecap="round" /></svg>
       </button>
     </div>

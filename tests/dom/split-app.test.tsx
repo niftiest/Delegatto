@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, screen, within } from '@testing-library/react'
 import { fake } from './fake-api'
 import { channel, flush, renderSettled, session } from './render'
-import { SplitApp } from '../../src/renderer/SplitApp'
+import { SplitApp, emptyHeadStyle } from '../../src/renderer/SplitApp'
 import type { SplitState } from '../../src/shared/split-view'
 
 const plant = channel(1, 'PlantPal')
@@ -162,5 +162,18 @@ describe('SplitApp', () => {
     fireEvent.click(button)
     await flush()
     expect(screen.getByRole('dialog', { name: 'Pick a project for pane 3' })).toBeTruthy()
+  })
+})
+
+describe("the empty pane's ✕ lands where the pane's ✕ was", () => {
+  it('in a one-row header: a band like a one-row header, the ✕ centered in it', () => {
+    expect(emptyHeadStyle(13)).toEqual({ minHeight: 52 })
+  })
+  it('in a header wrapped to two rows: a band as tall, the ✕ at its bottom', () => {
+    expect(emptyHeadStyle(40)).toEqual({ minHeight: 72, alignItems: 'flex-end' })
+  })
+  it('the usual band when nothing was remembered', () => {
+    expect(emptyHeadStyle(undefined)).toBeUndefined()
+    expect(emptyHeadStyle(Number.NaN)).toBeUndefined()
   })
 })

@@ -1675,8 +1675,8 @@ html[data-custom-font] body *:not(pre):not(pre *):not(code) { font-family:var(--
 /* One chat on its own may be narrower than a pane among others (see MIN_SINGLE_WIDTH). */
 .split-grid[data-layout="single"] .split-pane { min-width:0; }
 .split-empty { align-items:center; justify-content:center; }
-/* An empty pane keeps its ✕ where the pane header had it: it takes the slot out of the layout. */
-.split-empty-close { position:absolute; top:8px; right:10px; }
+/* An empty pane keeps a header band like a pane's, with its ✕ in the same place: it takes the slot out of the layout. */
+.split-empty-head { position:absolute; top:0; left:0; right:0; }
 /* An empty slot's one button, in the middle of the pane. */
 .split-select-project { display:inline-flex; align-items:center; gap:8px; padding:14px 26px; border-radius:8px; font-size:15px; }
 .split-select-project svg { display:block; width:16px; height:16px; }
