@@ -22,6 +22,7 @@ const api: DelegattoApi & EngineApi = {
   syncSessionIfStale: sessionPk => ipcRenderer.invoke(IPC.syncSessionIfStale, sessionPk),
   listSubagents: toolUseId => ipcRenderer.invoke(IPC.listSubagents, toolUseId),
   search: query => ipcRenderer.invoke(IPC.search, query),
+  searchChats: query => ipcRenderer.invoke(IPC.searchChats, query),
   searchProject: (projectId, query) => ipcRenderer.invoke(IPC.searchProject, projectId, query),
   runIndex: () => ipcRenderer.invoke(IPC.indexRun),
   appReady: () => ipcRenderer.send(IPC.appReady),

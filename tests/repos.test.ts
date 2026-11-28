@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { openCatalog } from '../src/main/catalog/db'
 import { upsertProject, setProjectCwd, projectFolderFor, repairProjectCwds, upsertSession, listProjects, listSessions, listSubagents, sumTotalCostUsd, projectIdsOfSessions } from '../src/main/catalog/repos'
-import { search } from '../src/main/catalog/search'
+import { search, searchChatTitles } from '../src/main/catalog/search'
 
 function seed() {
   const db = openCatalog(':memory:')
@@ -120,6 +120,23 @@ describe('repos', () => {
     db.prepare("INSERT INTO messages (session_pk,uuid,seq,role,byte_offset,text) VALUES (?,?,?,?,?,?)")
       .run(agent, 'sub2', 0, 'user', 0, 'the orphaned walrus')
     expect(search(db, 'walrus')).toEqual([])
+  })
+
+  it("names a match's message, so the chat can go to it, but not a subagent's, which only opens the chat", () => {
+    const { db, p } = seed()
+    expect(search(db, 'scraper')[0]).toMatchObject({ uuid: 'u1', seq: 0 })
+    const agent = upsertSession(db, { projectId: p, sessionId: 'sess-1', kind: 'subagent', filePath: '/f/sess-1/agent-c.jsonl', fileSize: 3, fileMtimeMs: 3, agentId: 'agent-c', toolUseId: 'toolu_03' })
+    db.prepare("INSERT INTO messages (session_pk,uuid,seq,role,byte_offset,text) VALUES (?,?,?,?,?,?)").run(agent, 'sub3', 0, 'user', 0, 'the narwhal report')
+    expect(search(db, 'narwhal')[0]).toMatchObject({ uuid: null })
+  })
+
+  it('finds chats by title, ignoring case, and takes % and _ literally', () => {
+    const { db, p, s } = seed()
+    expect(searchChatTitles(db, 'PAGINATION')).toEqual([{ sessionPk: s, projectDir: 'C--Users-x-GIT-Demo', title: 'Fix pagination', lastTs: '2026-07-23T10:00:00Z' }])
+    expect(searchChatTitles(db, '%')).toEqual([])
+    expect(searchChatTitles(db, '  ')).toEqual([])
+    upsertSession(db, { projectId: p, sessionId: 'sess-9', kind: 'subagent', filePath: '/f/sess-9.jsonl', fileSize: 1, fileMtimeMs: 1, title: 'pagination helper' })
+    expect(searchChatTitles(db, 'pagination')).toHaveLength(1)
   })
 
   it('does not throw on FTS syntax the user might type', () => {

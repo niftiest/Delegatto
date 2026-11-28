@@ -84,6 +84,10 @@ export type ChatPaneHandle = {
   supersede(): void
   /** Ctrl+F: the find box above the chat. */
   focusFind(): void
+  /** Puts the cursor in this chat's message box, once it's there. */
+  focusComposer(): void
+  /** Goes to a message, as a find result does: in this chat, or in the one about to open. */
+  jumpTo(target: { sessionPk: number; uuid: string; seq: number }): void
 }
 
 type ChatPaneProps = {
@@ -1033,8 +1037,27 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
     focusFind: () => {
       findInputRef.current?.focus()
       findInputRef.current?.select()
+    },
+    focusComposer: () => {
+      // The chat's box mounts with it, so wait for the frame that draws it.
+      let tries = 0
+      const attempt = (): void => {
+        // A split pane has its own root; the main window shows one chat, so its box is the page's.
+        const box = (rootRef.current ?? document).querySelector<HTMLTextAreaElement>('.composer textarea')
+        if (box !== null && box !== undefined) { box.focus(); return }
+        if (++tries < 20) requestAnimationFrame(attempt)
+      }
+      requestAnimationFrame(attempt)
+    },
+    jumpTo: target => {
+      // A chat that's about to open keeps its target through the switch.
+      if (target.sessionPk !== sessionIdRef.current) jumpPendingRef.current = true
+      setJumpTarget(target)
     }
   }), [])
+  const rootRef = useRef<HTMLDivElement>(null)
+  const sessionIdRef = useRef(session.id)
+  sessionIdRef.current = session.id
   // Ctrl+F in the split window: the focused pane's find box. The main window binds it in
   // App, which knows what's open on top of the chat.
   useEffect(() => {
@@ -1299,7 +1322,7 @@ export function ChatPane({ ref, session, project, sessions, data, rail, sync, ra
   // in the layout, so the pane lays out as it would in the main window.
   return (
     <DialogTarget.Provider value={dialogSlot ?? null}>
-      <div className="split-pane-events" style={{ display: 'contents' }} onPointerDownCapture={onFocus} onFocusCapture={onFocus}>
+      <div ref={rootRef} className="split-pane-events" style={{ display: 'contents' }} onPointerDownCapture={onFocus} onFocusCapture={onFocus}>
         {body}
       </div>
     </DialogTarget.Provider>

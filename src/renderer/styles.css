@@ -978,6 +978,12 @@ details[open] > .shell-output-summary .shell-output-preview { visibility:hidden;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .search-snippet mark { background:color-mix(in srgb, var(--accent) 35%, transparent); color:var(--tx); border-radius:2px; padding:0 1px; }
 .search-hit-time { flex:none; font-size:11px; color:var(--mu); font-variant-numeric:tabular-nums; }
+/* Two sections: names on top (open), what was said below (go to the message). */
+.search-section + .search-section { border-top:1px solid var(--line); margin-top:4px; padding-top:4px; }
+.search-section-head { display:flex; align-items:baseline; gap:8px; padding:8px 18px 2px; font-size:12px; font-weight:700; color:var(--txt); }
+.search-section-head .search-count { padding:0; font-weight:400; font-size:11.5px; }
+.search-name-kind { flex:none; width:52px; font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--mu); }
+.search-name-note { flex:none; max-width:40%; font-size:11.5px; color:var(--mu); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* ── Settings window ── */
 .settings-window { display:flex; width:min(1100px, calc(100vw - 48px)); height:min(900px, calc(100vh - 48px));

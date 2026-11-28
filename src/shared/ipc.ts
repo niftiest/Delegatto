@@ -3,7 +3,7 @@ import type { ModelPrices } from './models'
 import type { AppDialogRequest } from './app-dialog'
 import type { CustomTheme, LocalTheme, ExportThemeResult, ImportThemeResult, SaveThemeResult, ThemeValues } from './themes'
 import type { ProjectSearchResult } from './project-search'
-import type { ProjectSummary, SessionSummary, SearchHit, TranscriptPage, IndexProgress, ChannelRow } from './types'
+import type { ProjectSummary, SessionSummary, SearchHit, ChatTitleHit, TranscriptPage, IndexProgress, ChannelRow } from './types'
 import type { ChannelIcon, ChannelGroup, AppSettings, SettingsSection } from './shell-types'
 import type { DeleteTarget } from './manage-types'
 import type { SplitLayout, SplitPane, SplitRatios, SplitState } from './split-view'
@@ -29,6 +29,7 @@ export const IPC = {
   syncSessionIfStale: 'catalog:syncSessionIfStale',
   listSubagents: 'catalog:listSubagents',
   search: 'catalog:search',
+  searchChats: 'catalog:searchChats',
   searchProject: 'catalog:searchProject',
   indexRun: 'index:run',
   indexProgress: 'index:progress',
@@ -125,6 +126,8 @@ export type DelegattoApi = {
   syncSessionIfStale(sessionPk: number): Promise<boolean>
   listSubagents(toolUseId: string): Promise<SessionSummary[]>
   search(query: string): Promise<SearchHit[]>
+  /** Chats whose title holds the query, for search's "Projects / Chats". */
+  searchChats(query: string): Promise<ChatTitleHit[]>
   searchProject(projectId: number, query: string): Promise<ProjectSearchResult>
   runIndex(): Promise<void>
   /** Tells main the first load is done: show the window, close the splash. */

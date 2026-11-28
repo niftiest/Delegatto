@@ -1187,7 +1187,7 @@ describe('parseSnippet (XSS-safe FTS snippet)', () => {
 
 describe('groupSearchHits', () => {
   const hit = (pk: number, dir: string, seq: number): SearchHit =>
-    ({ sessionPk: pk, sessionId: `s${pk}`, projectDir: dir, seq, ts: null, snippet: `hit ${seq}` })
+    ({ sessionPk: pk, sessionId: `s${pk}`, projectDir: dir, seq, ts: null, snippet: `hit ${seq}`, uuid: null })
   const chMap = new Map([
     ['C--Demo', { cwd: 'C:\Demo', dirName: 'C--Demo', meta: { dirName: 'C--Demo', friendlyName: 'My Demo', starred: false, groupId: null, icon: { kind: 'initials' as const }, hidden: false } }]
   ])

@@ -38,7 +38,12 @@ export type SessionSummary = {
 export type SearchHit = {
   sessionPk: number; sessionId: string; projectDir: string
   seq: number; ts: string | null; snippet: string
+  /** The message, to go to it in its chat; null for one in a subagent, which only opens the chat. */
+  uuid: string | null
 }
+
+/** A chat whose title matches a search. */
+export type ChatTitleHit = { sessionPk: number; projectDir: string; title: string | null; lastTs: string | null }
 
 /** Declared here — not in shared/ipc.ts — so src/main/indexer/ can import it
  *  without reaching into a module that names IPC channels. */

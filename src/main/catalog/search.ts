@@ -1,5 +1,5 @@
 import type { Catalog } from './db'
-import type { SearchHit } from '../../shared/types'
+import type { ChatTitleHit, SearchHit } from '../../shared/types'
 import { excerptAround, searchTerms, type ProjectSearchHit, type ProjectSearchResult } from '../../shared/project-search'
 
 /**
@@ -70,6 +70,7 @@ export function search(db: Catalog, query: string, limit = 100): SearchHit[] {
   return db.prepare(`
     SELECT chat.id AS sessionPk, s.session_id AS sessionId, p.dir_name AS projectDir,
            m.seq, m.ts,
+           CASE WHEN s.id = chat.id AND m.is_sidechain = 0 AND m.role IN ('user', 'assistant') THEN m.uuid END AS uuid,
            snippet(messages_fts, 0, '<mark>', '</mark>', '…', 18) AS snippet
     FROM messages_fts
     JOIN messages m ON m.id = messages_fts.rowid
@@ -80,4 +81,18 @@ export function search(db: Catalog, query: string, limit = 100): SearchHit[] {
     ORDER BY rank
     LIMIT ?
   `).all(match, limit) as SearchHit[]
+}
+
+/** Ctrl+K's "Projects / Chats": chats whose title holds the query, newest first. */
+export function searchChatTitles(db: Catalog, query: string, limit = 20): ChatTitleHit[] {
+  const q = query.trim()
+  if (q === '') return []
+  const like = `%${q.replace(/[\\%_]/g, c => `\\${c}`)}%`
+  return db.prepare(`
+    SELECT s.id AS sessionPk, p.dir_name AS projectDir, COALESCE(s.custom_title, s.ai_title, s.title) AS title, s.last_ts AS lastTs
+    FROM sessions s JOIN projects p ON p.id = s.project_id
+    WHERE s.kind = 'main' AND COALESCE(s.custom_title, s.ai_title, s.title) LIKE ? ESCAPE '\\'
+    ORDER BY s.last_ts DESC NULLS LAST, s.id DESC
+    LIMIT ?
+  `).all(like, limit) as ChatTitleHit[]
 }

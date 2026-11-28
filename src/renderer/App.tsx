@@ -12,7 +12,7 @@ import { Resizer } from './components/Resizer'
 import { IndexProgress } from './components/IndexProgress'
 import { ArchivedNotice, archivedNotice, readArchivedSeen, writeArchivedSeen } from './components/ArchivedNotice'
 import { NewChatDialog } from './components/NewChatDialog'
-import { SearchOverlay } from './components/SearchOverlay'
+import { SearchOverlay, type SearchJump } from './components/SearchOverlay'
 import { SettingsWindow, type SettingsSection } from './components/SettingsWindow'
 import { BlockedBanner } from './components/BlockedBanner'
 import { SyncConflictDialog, useSyncChat, useSyncOffer } from './components/SyncChat'
@@ -228,7 +228,7 @@ export function App() {
   // A desktop notification was clicked: open that chat.
   useEffect(() => api.onOpenChat((pk, dir) => openChatRef.current(pk, dir)), [])
 
-  async function openSearchResult(sessionPk: number, projectDir: string) {
+  async function openSearchResult(sessionPk: number, projectDir: string, jump: SearchJump | null = null) {
     setSearchOpen(false)
     const channel = channels.find(c => c.dirName === projectDir) ?? null
     const reqId = ++navReqId.current
@@ -239,9 +239,14 @@ export function App() {
     if (isStaleResponse(reqId, navReqId.current)) return
     setSessions(list)
     const target = list.find(s => s.id === sessionPk) ?? null
-    if (target !== null) await openSession(target)
+    if (target === null) return
+    await openSession(target)
+    const opened = reqId + 1 // openSession counts itself as one more navigation
+    // Once the chat is open (the pane may only now exist), it loads back to the message,
+    // unless something else was picked while it opened.
+    if (jump !== null && navReqId.current === opened) paneRef.current?.jumpTo({ sessionPk, uuid: jump.uuid, seq: jump.seq })
   }
-  openChatRef.current = (pk, dir) => { setManageOpen(false); void openSearchResult(pk, dir) }
+  openChatRef.current =(pk, dir) => { setManageOpen(false); void openSearchResult(pk, dir) }
 
   // Guards clicking channels/sessions faster than their fetches resolve, which
   // would otherwise let a stale response overwrite a newer selection. Bumped
@@ -328,6 +333,9 @@ export function App() {
 
   const openSessionRef = useRef(openSession)
   openSessionRef.current = openSession
+
+  /** After the user picks a chat or project: the cursor goes to its message box. */
+  const focusComposer = (): void => { paneRef.current?.focusComposer() }
 
   async function openProject(next: ChannelRow) {
     const reqId = ++navReqId.current
@@ -689,7 +697,7 @@ export function App() {
       {(manageOpen || !sidebarExpanded) && (
         <IconRail channels={channels} groups={groups} selectedId={project?.id ?? null} unread={unread} remote={remoteProjects}
         sidebarExpanded={false} reveal={revealChannel} onRevealed={() => setRevealChannel(null)}
-        onSelect={p => { setManageOpen(false); void openProject(p) }}
+        onSelect={p => { setManageOpen(false); void openProject(p).then(focusComposer) }}
         onToggleSidebar={() => { setManageOpen(false); setSidebarExpanded(true) }}
         onNewChat={() => { setNewChatCwd(null); setNewChatOpen(true) }} onOpenSearch={() => setSearchOpen(true)}
         onOpenSettings={() => { setSettingsSection(undefined); setSettingsOpen(true) }}
@@ -708,7 +716,7 @@ export function App() {
             onCollapse={() => setSidebarExpanded(false)} channels={channels} groups={groups} selectedId={project?.id ?? null} width={navWidth}
             reveal={revealChannel} onRevealed={() => setRevealChannel(null)}
             unread={unread} remote={remoteProjects} showRepos={githubReady} totalCost={totalCost} elevated={elevated} activeChats={activeChats} planUsage={planUsage} session={session}
-            onSelect={p => void openProject(p)} onNewChat={() => { setNewChatCwd(null); setNewChatOpen(true) }}
+            onSelect={p => void openProject(p).then(focusComposer)} onNewChat={() => { setNewChatCwd(null); setNewChatOpen(true) }}
             onOpenSearch={() => setSearchOpen(true)} onOpenPool={() => setPoolOpen(true)}
             onRename={onRenameChannel} onToggleStar={onToggleStar} onMoveToGroup={onMoveToGroup}
             onCreateGroup={onCreateGroup} onDeleteGroup={onDeleteGroup} onRenameGroup={onRenameGroup}
@@ -726,7 +734,7 @@ export function App() {
       {!manageOpen && (settings?.showBlade ?? true) && sessions.length > 1 && (
         <>
           <Blade sessions={sessions} selectedId={session?.id ?? null} remote={remoteSessions} collapsed={collapsed} width={bladeWidth}
-            onToggle={() => setCollapsed(c => !c)} onSelect={s => void openSession(s)} onDelete={s => setDeleteTarget({ scope: 'chat', sessionPk: s.id })} />
+            onToggle={() => setCollapsed(c => !c)} onSelect={s => void openSession(s).then(focusComposer)} onDelete={s => setDeleteTarget({ scope: 'chat', sessionPk: s.id })} />
           {!collapsed && <Resizer label="Resize session list"
             onResize={dx => setBladeWidth(w => clamp(w + dx, BLADE_MIN, BLADE_MAX))} />}
         </>
@@ -847,7 +855,8 @@ export function App() {
         <SearchOverlay
           channels={channels}
           onClose={() => setSearchOpen(false)}
-          onOpen={(pk, dir) => void openSearchResult(pk, dir)}
+          onOpen={(pk, dir, jump) => void openSearchResult(pk, dir, jump).then(focusComposer)}
+          onOpenProject={p => { setSearchOpen(false); void openProject(p).then(focusComposer) }}
         />
       )}
       {memoryChannel !== null && <MemoryDialog projectId={memoryChannel.id} title={resolveChannelName(memoryChannel.meta, memoryChannel.cwd, memoryChannel.dirName)} onClose={() => setMemoryChannel(null)} />}

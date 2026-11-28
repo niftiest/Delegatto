@@ -14,7 +14,7 @@ import { listProjects, listSubagents, sumTotalCostUsd } from './catalog/repos'
 import { backupCatalogOnce, chatsToShow, folderGone, isConversationText, moveCustomisations, withoutMovedChats } from './catalog/archive'
 import { displayText } from './jsonl/synthetic'
 import { readOriginRepo } from './engine/github'
-import { search, searchProject } from './catalog/search'
+import { search, searchChatTitles, searchProject } from './catalog/search'
 import { getSettings, updateSettings } from './catalog/settings'
 import { MAX_LOCAL_THEME_BYTES, ensureLocalThemesDir, listLocalThemes, localThemeName, localThemesDir } from './local-themes'
 import type { AppSettings, AppTheme, ChannelMeta } from '../shared/shell-types'
@@ -263,6 +263,7 @@ export function registerIpc(db: Catalog, hub: WindowHub, hooks: IpcHooks = {}): 
   ipcMain.handle(IPC.syncSessionIfStale, (_e, sessionPk: number) => syncSessionIfStale(db, sessionPk))
   ipcMain.handle(IPC.listSubagents, (_e, toolUseId: string) => listSubagents(db, toolUseId))
   ipcMain.handle(IPC.search, (_e, query: string) => withoutMovedChats(db, search(db, query)))
+  ipcMain.handle(IPC.searchChats, (_e, query: string) => withoutMovedChats(db, searchChatTitles(db, String(query ?? ''))))
   ipcMain.handle(IPC.searchProject, (_e, projectId: number, query: string) => searchProject(db, projectId, query))
   ipcMain.handle(IPC.indexRun, async () => {
     await runIndex(db, {
