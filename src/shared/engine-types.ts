@@ -65,6 +65,10 @@ export type LiveEvent =
   | { kind: 'subagentStep'; parent: string; label: string }
   /** A subagent has finished, however it finished. */
   | { kind: 'taskEnded'; toolUseId: string }
+  /** Results of Claude's tool calls. Read in main (scheduled jobs), not sent to the window. */
+  | { kind: 'toolResults'; results: Array<{ toolUseId: string; text: string; isError: boolean }> }
+  /** A job Claude scheduled has fired; `content` is Claude Code's text for it. Read in main. */
+  | { kind: 'scheduledFire'; content: string }
   /** Claude Code wants a tool approved. Handled in the main process, never sent to the window. */
   | { kind: 'permissionAsked'; requestId: string; args: Record<string, unknown> }
   /** Claude Code stopped waiting for an answer it had asked for. Also handled in main. */
@@ -158,6 +162,12 @@ export type BackgroundTask = {
   startedAt: number
   lastTool: string | null
   tokens: number | null
+  /** Housekeeping Claude Code says isn't activity: not counted as work going on. */
+  ambient?: boolean
+  /** Runs outside this process: shown as running, but the chat needn't stay up for it. */
+  offHost?: boolean
+  /** A job Claude scheduled (type 'scheduled'): when it runs next, if known. */
+  schedule?: { recurring: boolean; nextRun: number | null }
 }
 
 /** The running turn as the engine pool sees it. */

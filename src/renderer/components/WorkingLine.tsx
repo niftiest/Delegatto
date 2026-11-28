@@ -26,26 +26,36 @@ export function BackgroundTasksLine({ tasks, running, onStop, onShowOutput }: { 
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [])
-  if (tasks.length === 0) return null
-  const count = tasks.length === 1 ? '1 background task' : `${tasks.length} background tasks`
+  // Housekeeping Claude Code marks ambient isn't work going on, so it isn't shown.
+  const shown = tasks.filter(t => t.ambient !== true)
+  if (shown.length === 0) return null
+  const working = shown.filter(t => t.type !== 'scheduled').length
+  const scheduled = shown.length - working
+  const count = working === 1 ? '1 background task' : `${working} background tasks`
   return (
     <div className="background-tasks" role="status">
-      {!running && (
+      {!running && working > 0 && (
         <div className="working-line background-tasks-head">
           <span className="working-star" aria-hidden="true">✻</span> Waiting on {count}… <span className="working-details">(Claude picks this up when it finishes; you can keep chatting)</span>
         </div>
       )}
-      {tasks.slice(0, MAX_TASK_ROWS).map(task => {
+      {!running && working === 0 && (
+        <div className="working-line background-tasks-head scheduled-head">
+          <span aria-hidden="true">⏲</span> {scheduled === 1 ? '1 scheduled task' : `${scheduled} scheduled tasks`} in this chat <span className="working-details">(the chat stays open so they run; ask Claude to cancel one)</span>
+        </div>
+      )}
+      {shown.slice(0, MAX_TASK_ROWS).map(task => {
         const { title, details } = backgroundTaskLabel(task, now)
+        const isScheduled = task.type === 'scheduled'
         return (
-          <div className="background-task" key={task.id}>
+          <div className={`background-task${isScheduled ? ' scheduled-task' : ''}`} key={task.id}>
             <span className="background-task-text" title={title}>{title} <span className="working-details">({details.join(' · ')})</span></span>
             {onShowOutput !== undefined && taskHasOutput(task.type) && <button type="button" className="background-task-output" onClick={() => onShowOutput(task.id, title)}>Output</button>}
-            <button type="button" className="queue-btn queue-remove background-task-stop" title="Stop this task" aria-label={`Stop ${title}`} onClick={() => onStop(task.id)}>✕</button>
+            {!isScheduled && <button type="button" className="queue-btn queue-remove background-task-stop" title="Stop this task" aria-label={`Stop ${title}`} onClick={() => onStop(task.id)}>✕</button>}
           </div>
         )
       })}
-      {tasks.length > MAX_TASK_ROWS && <div className="background-task"><span className="background-task-text working-details">and {tasks.length - MAX_TASK_ROWS} more</span></div>}
+      {shown.length > MAX_TASK_ROWS && <div className="background-task"><span className="background-task-text working-details">and {shown.length - MAX_TASK_ROWS} more</span></div>}
     </div>
   )
 }

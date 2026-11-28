@@ -212,7 +212,7 @@ export function TasksDialog({ tasks, onStop, onShowOutput, onClose }: {
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t) }, [])
   return (
     <PanelModal title="Background tasks" label="Background tasks" onClose={onClose}>
-      {tasks.length === 0 && <p className="settings-note">Nothing is running in the background in this chat.</p>}
+      {tasks.length === 0 && <p className="settings-note">Nothing is running in the background or scheduled in this chat.</p>}
       <div className="ms-list">
         {tasks.map(task => {
           const { title, details } = backgroundTaskLabel(task, now)
@@ -222,10 +222,10 @@ export function TasksDialog({ tasks, onStop, onShowOutput, onClose }: {
                 <span className="ms-name task-title" title={title}>{title}</span>
                 <span className="mcp-item-actions">
                   {taskHasOutput(task.type) && <button type="button" className="btn-secondary" onClick={() => onShowOutput(task.id, title)}>Output</button>}
-                  <button type="button" className="btn-secondary" onClick={() => onStop(task.id)}>Stop</button>
+                  {task.type !== 'scheduled' && <button type="button" className="btn-secondary" onClick={() => onStop(task.id)}>Stop</button>}
                 </span>
               </div>
-              <div className="ms-detail">{details.join(' · ')}</div>
+              <div className="ms-detail">{details.join(' · ')}{task.type === 'scheduled' ? ' · ask Claude to cancel it' : ''}</div>
             </div>
           )
         })}

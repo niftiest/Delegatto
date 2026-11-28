@@ -1,4 +1,5 @@
 import type { SpawnSpec } from './transport'
+import { ScheduledJobs } from './scheduled-jobs'
 import type { BackgroundTask, LiveEvent, EngineSnapshot, TurnInfo } from '../../shared/engine-types'
 
 /** Narrow surface of Transport the pool depends on -- lets tests inject a
@@ -46,6 +47,19 @@ function settingsKey(spec: SpawnSpec): string {
 }
 
 /** Claude Code's new list, keeping when each task started and how far it has got. */
+/** What the chat shows: Claude Code's background tasks, then the jobs Claude scheduled. */
+function tasksOf(entry: Entry): BackgroundTask[] {
+  const jobs = entry.scheduled.list()
+  return jobs.length === 0 ? entry.backgroundTasks : [...entry.backgroundTasks, ...jobs]
+}
+
+/** Work that dies with the process, so it mustn't be closed for being idle or restarted
+ *  under it: background tasks other than housekeeping (ambient) or ones that run elsewhere
+ *  (off_host), and any job Claude scheduled. */
+function holdsProcess(entry: Entry): boolean {
+  return entry.backgroundTasks.some(t => t.ambient !== true && t.offHost !== true) || entry.scheduled.list().length > 0
+}
+
 function mergeBackgroundTasks(known: BackgroundTask[], incoming: BackgroundTask[], now: number): BackgroundTask[] {
   return incoming.map(t => {
     const before = known.find(k => k.id === t.id)
@@ -87,6 +101,9 @@ interface Entry {
   /** What this process has running in the background. They die with it, so it isn't
    *  idle while there are any, even though no turn is running. */
   backgroundTasks: BackgroundTask[]
+  /** Jobs Claude scheduled in this process (CronCreate, /loop). They're session-only and die
+   *  with it, so they too keep it from being closed for being idle. */
+  scheduled: ScheduledJobs
   /** Set the instant this entry is reaped/shut down. Captured by closures
    *  passed to `transport.on`/`onExit` at spawn time, so a transport's own
    *  late-firing callbacks (e.g. a delayed OS-level exit after we've already
@@ -178,7 +195,7 @@ export class SessionPool {
     // and it would read as another program holding the chat.
     // Not while it has background work: replacing it would kill that work, so this
     // message goes to the process as it is.
-    if (entry !== undefined && !entry.busy && !entry.disposed && entry.backgroundTasks.length === 0 && (entry.reload === true || settingsKey(entry.spec) !== settingsKey(spec))) {
+    if (entry !== undefined && !entry.busy && !entry.disposed && !holdsProcess(entry) && (entry.reload === true || settingsKey(entry.spec) !== settingsKey(spec))) {
       this.closeAndHold(sessionKey, entry).push({ uuid: uuidOf(msg), run: () => this.send(sessionKey, spec, msg) })
       return
     }
@@ -303,7 +320,8 @@ export class SessionPool {
 
   /** What this chat's process is running in the background. */
   backgroundTasks(sessionKey: string): BackgroundTask[] {
-    return this.live.get(sessionKey)?.backgroundTasks ?? []
+    const entry = this.live.get(sessionKey)
+    return entry === undefined ? [] : tasksOf(entry)
   }
 
   /** A snapshot of every live engine for the pool HUD (engine:list). */
@@ -319,7 +337,7 @@ export class SessionPool {
         startedAt: entry.startedAt,
         lastActivity: entry.lastActivity,
         busy: entry.busy,
-        background: entry.backgroundTasks.length
+        background: tasksOf(entry).length
       })
     }
     return out
@@ -347,7 +365,7 @@ export class SessionPool {
    *  was released. */
   releaseIdle(sessionKey: string): boolean {
     const entry = this.live.get(sessionKey)
-    if (entry === undefined || entry.disposed || entry.busy || entry.backgroundTasks.length > 0) return false
+    if (entry === undefined || entry.disposed || entry.busy || holdsProcess(entry)) return false
     this.dispose(sessionKey, entry)
     return true
   }
@@ -366,7 +384,7 @@ export class SessionPool {
     const entry = this.live.get(sessionKey)
     if (entry === undefined || entry.disposed) return 'none'
     entry.reload = true
-    return entry.busy || entry.backgroundTasks.length > 0 ? 'afterTurn' : 'restarted'
+    return entry.busy || holdsProcess(entry) ? 'afterTurn' : 'restarted'
   }
 
   /** Asks a live process something (not a turn: it doesn't count as activity).
@@ -424,7 +442,7 @@ export class SessionPool {
 
     const limit = this.idleReapMs()
     for (const [key, entry] of [...this.live.entries()]) {
-      if (entry.disposed || entry.busy || entry.backgroundTasks.length > 0) continue
+      if (entry.disposed || entry.busy || holdsProcess(entry)) continue
       if (nowMs - entry.lastActivity > limit) this.closeAndHold(key, entry)
     }
   }
@@ -457,7 +475,7 @@ export class SessionPool {
   private spawn(sessionKey: string, spec: SpawnSpec, msg: object | null): void {
     const transport = this.transportFactory(spec)
     const now = this.now()
-    const entry: Entry = { transport, spec, startedAt: now, lastActivity: now, busy: msg !== null, turnStartedAt: now, turnTokens: 0, backgroundTasks: [], disposed: false }
+    const entry: Entry = { transport, spec, startedAt: now, lastActivity: now, busy: msg !== null, turnStartedAt: now, turnTokens: 0, backgroundTasks: [], scheduled: new ScheduledJobs(this.now), disposed: false }
     this.live.set(sessionKey, entry)
 
     transport.on((e) => {
@@ -480,14 +498,23 @@ export class SessionPool {
       }
       if (e.kind === 'background') {
         entry.backgroundTasks = mergeBackgroundTasks(entry.backgroundTasks, e.tasks, entry.lastActivity)
-        this.emitTo(sessionKey, { kind: 'background', tasks: entry.backgroundTasks })
+        this.emitTo(sessionKey, { kind: 'background', tasks: tasksOf(entry) })
         return
       }
       if (e.kind === 'taskProgress') {
         entry.backgroundTasks = entry.backgroundTasks.map(t => t.id === e.taskId ? { ...t, lastTool: e.lastTool ?? t.lastTool, tokens: e.tokens ?? t.tokens } : t)
-        this.emitTo(sessionKey, { kind: 'background', tasks: entry.backgroundTasks })
+        this.emitTo(sessionKey, { kind: 'background', tasks: tasksOf(entry) })
         return
       }
+      // Scheduled jobs are read off Claude's own tool calls and their results.
+      if (e.kind === 'toolResults' || e.kind === 'scheduledFire') {
+        const changed = e.kind === 'scheduledFire'
+          ? entry.scheduled.onFire(e.content)
+          : e.results.map(r => entry.scheduled.onToolResult(r.toolUseId, r.text, r.isError)).some(Boolean)
+        if (changed) this.emitTo(sessionKey, { kind: 'background', tasks: tasksOf(entry) })
+        return
+      }
+      if (e.kind === 'assistant' && entry.scheduled.onToolUse(e.blocks)) this.emitTo(sessionKey, { kind: 'background', tasks: tasksOf(entry) })
       this.emitTo(sessionKey, e)
     })
 

@@ -18,6 +18,7 @@ import type { RemoteProject } from '../shared/sync-types'
 // contract.ts's own type-only StreamedRow import.
 import type { NewProjectOptions } from '../shared/engine-ipc-contract'
 import { FOLDER_MISSING, PERMISSION_MODES, type BackgroundTask, type LiveEvent, type PermissionRequest, type PermissionSuggestion } from '../shared/engine-types'
+import { formatReset } from '../shared/plan-usage'
 // Type-only: StreamedRow's home module (src/main/jsonl/stream.ts) reads real
 // files, but importing just its *type* is erased at compile time -- same
 // pattern engine-ipc-contract.ts already uses.
@@ -807,6 +808,8 @@ export function reduceLivePreview(prev: LivePreview | null, event: LiveEvent): L
     case 'suggestion':
     case 'background':
     case 'taskProgress':
+    case 'toolResults':
+    case 'scheduledFire':
     case 'commandLifecycle':
     case 'permissionAsked':
     case 'permissionCancelled':
@@ -1001,7 +1004,13 @@ export function workingDetails(d: {
 
 /** One line about a background task: what it is, what it's doing, how long it's taken. */
 export function backgroundTaskLabel(task: BackgroundTask, now: number): { title: string; details: string[] } {
-  const kind = task.type === 'local_bash' ? 'Bash' : task.type === 'local_agent' ? (task.agent ?? 'Agent') : task.type.replace(/^local_/, '')
+  if (task.type === 'scheduled') {
+    const details = [task.schedule?.recurring === false ? 'once' : 'repeats']
+    const next = task.schedule?.nextRun ?? null
+    if (next !== null) details.push(`next ${formatReset(next, now)}`)
+    return { title: task.description.length > 0 ? `Scheduled: ${task.description}` : 'Scheduled', details }
+  }
+  const kind =task.type === 'local_bash' ? 'Bash' : task.type === 'local_agent' ? (task.agent ?? 'Agent') : task.type.replace(/^local_/, '')
   const details = [elapsedLabel(now - task.startedAt)]
   if (task.lastTool !== null) details.push(task.lastTool)
   if (task.tokens !== null && task.tokens > 0) details.push(`${tokenLabel(task.tokens)} context`)

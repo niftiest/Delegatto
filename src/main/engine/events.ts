@@ -34,7 +34,9 @@ function parseBackgroundTasks(raw: unknown): BackgroundTask[] {
       agent: typeof t.subagent_type === 'string' ? t.subagent_type : null,
       startedAt: 0,
       lastTool: null,
-      tokens: null
+      tokens: null,
+      ...(t.ambient === true ? { ambient: true } : {}),
+      ...(t.off_host === true ? { offHost: true } : {})
     })
   }
   return tasks
@@ -44,6 +46,7 @@ function parseSystem(row: Record<string, unknown>): LiveEvent {
   const other: LiveEvent = { kind: 'other', type: 'system' }
   if (row.subtype === 'status') return { kind: 'status', status: typeof row.status === 'string' ? row.status : null, ...(typeof row.permissionMode === 'string' ? { permissionMode: row.permissionMode } : {}) }
   if (row.subtype === 'background_tasks_changed') return { kind: 'background', tasks: parseBackgroundTasks(row.tasks) }
+  if (row.subtype === 'scheduled_task_fire') return { kind: 'scheduledFire', content: typeof row.content === 'string' ? row.content : '' }
   if (row.subtype === 'task_started' && row.task_type === 'local_agent' && typeof row.tool_use_id === 'string') {
     return { kind: 'taskStarted', toolUseId: row.tool_use_id, description: typeof row.description === 'string' ? row.description : '' }
   }
@@ -264,6 +267,20 @@ export function elicitationFrom(c: ControlRequest): Elicitation {
   }
 }
 
+/** The results of Claude's tool calls, from a user row; null when it has none. */
+function parseToolResults(row: Record<string, unknown>): LiveEvent | null {
+  const message = row.message
+  if (!isPlainObject(message) || !Array.isArray(message.content)) return null
+  const results: Array<{ toolUseId: string; text: string; isError: boolean }> = []
+  for (const b of message.content) {
+    if (!isPlainObject(b) || b.type !== 'tool_result' || typeof b.tool_use_id !== 'string') continue
+    const text = typeof b.content === 'string' ? b.content
+      : Array.isArray(b.content) ? b.content.map(x => (isPlainObject(x) && typeof x.text === 'string' ? x.text : '')).join('\n') : ''
+    results.push({ toolUseId: b.tool_use_id, text, isError: b.is_error === true })
+  }
+  return results.length > 0 ? { kind: 'toolResults', results } : null
+}
+
 /** Tolerant, never-throwing parse of one stream-json stdout line into a
  *  typed LiveEvent. Mirrors jsonl/parse.ts's parseLine: blank, non-JSON,
  *  non-object, or type-less lines all yield null. Every field narrowed off
@@ -298,6 +315,8 @@ export function parseEvent(line: string): LiveEvent | null {
       return parseRateLimit(value)
     case 'result':
       return parseResult(value)
+    case 'user':
+      return parseToolResults(value) ?? { kind: 'other', type }
     case 'control_cancel_request':
       return typeof value.request_id === 'string' ? { kind: 'permissionCancelled', requestId: value.request_id } : { kind: 'other', type }
     case 'command_lifecycle':
